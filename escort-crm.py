@@ -26,8 +26,8 @@ def safe_fetch(table, select_query="*"):
             time_module.sleep(1)
     return []
 
-st.set_page_config(page_title="Business CRM", layout="wide")
-st.title("Business CRM")
+st.set_page_config(page_title="Jack's CRM", layout="wide")
+st.title("Jacks's CRM")
 
 # --- Dialogs (Popups) ---
 @st.dialog("Manage Contact")
