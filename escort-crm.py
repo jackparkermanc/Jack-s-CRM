@@ -376,12 +376,7 @@ with tab4:
                 st.rerun() 
                 
             except Exception as e:
-                log_to_db("ERROR", f"Failed to send message: {e}")
-                st.error(f"Failed to send message: {e}")
-                
-    else:
-        st.info("Please add contacts in the Contact Management tab first.")
-
+# --- TAB 5: SYSTEM LOGS ---
 with tab5:
     st.header("System Logs")
     
@@ -391,7 +386,12 @@ with tab5:
             st.rerun()
     with col2:
         if st.button("🗑️ Clear Logs"):
-            supabase.table("app_logs").delete().neq("id", 0).execute()
+            try:
+                # Use -1 as an impossible ID to safely trigger a delete of all rows
+                supabase.table("app_logs").delete().neq("id", -1).execute()
+            except Exception as e:
+                st.error("⚠️ Failed to clear logs. If you continue to see this, ensure RLS is disabled on the `app_logs` table in Supabase.")
+                time_module.sleep(3)
             st.rerun()
 
     logs_data = safe_fetch("app_logs", "*", order_col="created_at", order_desc=True)
