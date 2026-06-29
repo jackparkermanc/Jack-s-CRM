@@ -59,167 +59,176 @@ def contact_dialog(action, data=None):
                 st.error(f"Error saving contact: {e}")
             st.rerun()
 
-@st.dialog("Manage Category")
-def category_dialog(action, data=None, main_cats=None, default_parent_id=None):
-    if main_cats is None: main_cats = []
-    with st.form("cat_form"):
-        name = st.text_input("Category Name", value=data['name'] if data else "")
-        
-        parent_opts = ["None (Main Category)"] + [c['name'] for c in main_cats if (not data or c['id'] != data.get('id'))]
-        
-        default_idx = 0
-        if data and data.get('parent_id'):
-            for i, c in enumerate(main_cats):
-                if c['id'] == data['parent_id']:
-                    default_idx = i + 1
-        elif default_parent_id:
-            for i, c in enumerate(main_cats):
-                if c['id'] == default_parent_id:
-                    default_idx = i + 1
-                    
-        parent_sel = st.selectbox("Parent Category", parent_opts, index=default_idx)
-        
+@st.dialog("Add Main Category")
+def add_main_category_dialog():
+    with st.form("main_cat_form"):
+        name = st.text_input("Category Name")
         if st.form_submit_button("Submit"):
-            parent_id = None
-            if parent_sel != "None (Main Category)":
-                parent_id = next(c['id'] for c in main_cats if c['name'] == parent_sel)
-                
-            payload = {"name": name, "parent_id": parent_id}
             try:
-                if action == "Add":
-                    supabase.table("service_categories").insert(payload).execute()
-                    log_to_db("INFO", f"Added category: {name}")
-                else:
-                    supabase.table("service_categories").update(payload).eq("id", data['id']).execute()
-                    log_to_db("INFO", f"Updated category: {name}")
+                supabase.table("service_categories").insert({"name": name, "parent_id": None}).execute()
+                log_to_db("INFO", f"Added main category: {name}")
             except Exception as e:
-                log_to_db("ERROR", f"Category {action} failed: {e}")
-                st.error(f"Error saving category: {e}")
+                log_to_db("ERROR", f"Failed to add category: {e}")
+                st.error(f"Error: {e}")
             st.rerun()
 
-@st.dialog("Manage Service")
-def service_dialog(action, cat_dict, data=None, default_cat_id=None):
-    if not cat_dict:
-        st.warning("Please add a category first.")
-        if st.button("Close"): st.rerun()
+@st.dialog("Category Explorer", width="large")
+def category_explorer_dialog(main_cat_id):
+    cat_data = safe_fetch("service_categories")
+    s_data = safe_fetch("services")
+    main_cats = [c for c in cat_data if not c.get('parent_id')] if cat_data else []
+    
+    main_cat = next((c for c in main_cats if c['id'] == main_cat_id), None)
+    if not main_cat:
+        st.error("Category not found or deleted.")
         return
 
-    with st.form("s_form"):
-        cat_names = list(cat_dict.keys())
-        cat_idx = 0
+    # Setup isolated view state for this specific dialog session
+    if st.session_state.get('active_explorer_cat') != main_cat_id:
+        st.session_state.active_explorer_cat = main_cat_id
+        st.session_state.explorer_view = 'sub_cats'
+        st.session_state.explorer_sub_cat = None
+        st.session_state.explorer_service = None
+
+    view = st.session_state.explorer_view
+    scat = st.session_state.explorer_sub_cat
+
+    if view == 'sub_cats':
+        st.markdown(f"### 📁 {main_cat['name']}")
+        c1, c2, c3 = st.columns(3)
+        if c1.button("➕ Add Sub-Category", use_container_width=True):
+            st.session_state.explorer_view = 'add_sub'
+            st.rerun()
+        if c2.button("✏️ Edit Category", use_container_width=True):
+            st.session_state.explorer_view = 'edit_main'
+            st.rerun()
+        if c3.button("🗑️ Delete", use_container_width=True):
+            sub_cats = [c for c in cat_data if c.get('parent_id') == main_cat['id']]
+            cat_services = [s for s in s_data if s.get('category_id') == main_cat['id']]
+            if sub_cats or cat_services:
+                st.error("Remove sub-categories and services before deleting.")
+            else:
+                supabase.table("service_categories").delete().eq("id", main_cat['id']).execute()
+                st.rerun()
+
+        st.divider()
+        sub_cats = [c for c in cat_data if c.get('parent_id') == main_cat['id']]
+        if not sub_cats:
+            st.info("No sub-categories found. Click 'Add Sub-Category' above.")
+        else:
+            st.write("#### Select a Sub-Category:")
+            sc_cols = st.columns(2)
+            for i, scat_row in enumerate(sub_cats):
+                with sc_cols[i % 2]:
+                    if st.button(f"📂 {scat_row['name']}", key=f"sc_btn_{scat_row['id']}", use_container_width=True):
+                        st.session_state.explorer_view = 'services'
+                        st.session_state.explorer_sub_cat = scat_row
+                        st.rerun()
+
+    elif view == 'edit_main':
+        st.markdown(f"### ✏️ Edit {main_cat['name']}")
+        if st.button("⬅️ Back"):
+            st.session_state.explorer_view = 'sub_cats'
+            st.rerun()
+        with st.form("edit_main_form"):
+            new_name = st.text_input("Category Name", value=main_cat['name'])
+            if st.form_submit_button("Save"):
+                supabase.table("service_categories").update({"name": new_name}).eq("id", main_cat['id']).execute()
+                st.session_state.explorer_view = 'sub_cats'
+                st.rerun()
+
+    elif view == 'add_sub':
+        st.markdown(f"### ➕ Add Sub-Category to {main_cat['name']}")
+        if st.button("⬅️ Back"):
+            st.session_state.explorer_view = 'sub_cats'
+            st.rerun()
+        with st.form("add_sub_form"):
+            scat_name = st.text_input("Sub-Category Name")
+            if st.form_submit_button("Save"):
+                supabase.table("service_categories").insert({"name": scat_name, "parent_id": main_cat['id']}).execute()
+                st.session_state.explorer_view = 'sub_cats'
+                st.rerun()
+
+    elif view == 'services':
+        st.markdown(f"### 📂 {main_cat['name']} > {scat['name']}")
+        c1, c2, c3, c4 = st.columns([1, 1.5, 1, 1])
+        if c1.button("⬅️ Back"):
+            st.session_state.explorer_view = 'sub_cats'
+            st.rerun()
+        if c2.button("➕ Add Service"):
+            st.session_state.explorer_view = 'add_service'
+            st.rerun()
+        if c3.button("✏️ Edit"):
+            st.session_state.explorer_view = 'edit_sub'
+            st.rerun()
+        if c4.button("🗑️ Delete"):
+            scat_services_check = [s for s in s_data if s.get('category_id') == scat['id']]
+            if scat_services_check:
+                st.error("Remove services before deleting.")
+            else:
+                supabase.table("service_categories").delete().eq("id", scat['id']).execute()
+                st.session_state.explorer_view = 'sub_cats'
+                st.rerun()
+
+        st.divider()
+        scat_services = [s for s in s_data if s.get('category_id') == scat['id']]
+        if not scat_services:
+            st.info("No services found in this sub-category.")
+        else:
+            for row in scat_services:
+                with st.container(border=True):
+                    cols = st.columns([4, 1, 1])
+                    cols[0].write(f"**{row['title']}**<br>£{row['cost']} | {row['duration']} hrs", unsafe_allow_html=True)
+                    if cols[1].button("Edit", key=f"es_sub_{row['id']}", use_container_width=True):
+                        st.session_state.explorer_service = row
+                        st.session_state.explorer_view = 'edit_service'
+                        st.rerun()
+                    if cols[2].button("Delete", key=f"ds_sub_{row['id']}", use_container_width=True):
+                        supabase.table("services").delete().eq("id", row['id']).execute()
+                        st.rerun()
+
+    elif view == 'edit_sub':
+        st.markdown(f"### ✏️ Edit {scat['name']}")
+        if st.button("⬅️ Back"):
+            st.session_state.explorer_view = 'services'
+            st.rerun()
+        with st.form("edit_sub_form"):
+            new_name = st.text_input("Sub-Category Name", value=scat['name'])
+            if st.form_submit_button("Save"):
+                supabase.table("service_categories").update({"name": new_name}).eq("id", scat['id']).execute()
+                st.session_state.explorer_sub_cat['name'] = new_name 
+                st.session_state.explorer_view = 'services'
+                st.rerun()
+
+    elif view in ['add_service', 'edit_service']:
+        is_edit = (view == 'edit_service')
+        srv_data = st.session_state.explorer_service if is_edit else None
+        title_prefix = "✏️ Edit" if is_edit else "➕ Add"
+        st.markdown(f"### {title_prefix} Service in {scat['name']}")
         
-        if data and data.get('category_id'):
-            for i, name in enumerate(cat_names):
-                if cat_dict[name] == data['category_id']: cat_idx = i
-        elif default_cat_id:
-            for i, name in enumerate(cat_names):
-                if cat_dict[name] == default_cat_id: cat_idx = i
-                
-        cat_sel = st.selectbox("Category", cat_names, index=cat_idx if cat_names else 0)
-        t = st.text_input("Title", value=data['title'] if data else "")
-        d = st.number_input("Hours", value=float(data['duration']) if data else 0.5, step=0.5)
-        c = st.number_input("Cost (£)", value=float(data['cost']) if data else 0.0, step=10.0)
-        a = st.number_input("Additional Costs (£)", value=float(data['additional_costs']) if data else 0.0, step=10.0)
-        
-        type_options = ["In-call", "Out-call", "Both"]
-        ctype = st.selectbox("Type", type_options, index=type_options.index(data['call_type']) if data else 0)
-        
-        if st.form_submit_button("Submit"):
-            payload = {
-                "category_id": cat_dict[cat_sel],
-                "title": t, 
-                "duration": d, 
-                "call_type": ctype, 
-                "cost": c, 
-                "additional_costs": a
-            }
-            try:
-                if action == "Add": 
+        if st.button("⬅️ Back"):
+            st.session_state.explorer_view = 'services'
+            st.rerun()
+            
+        with st.form("service_form"):
+            t = st.text_input("Title", value=srv_data['title'] if srv_data else "")
+            d = st.number_input("Hours", value=float(srv_data['duration']) if srv_data else 0.5, step=0.5)
+            c = st.number_input("Cost (£)", value=float(srv_data['cost']) if srv_data else 0.0, step=10.0)
+            a = st.number_input("Additional Costs (£)", value=float(srv_data['additional_costs']) if srv_data else 0.0, step=10.0)
+            type_options = ["In-call", "Out-call", "Both"]
+            ctype = st.selectbox("Type", type_options, index=type_options.index(srv_data['call_type']) if srv_data else 0)
+            
+            if st.form_submit_button("Save"):
+                payload = {
+                    "category_id": scat['id'],
+                    "title": t, "duration": d, "call_type": ctype, "cost": c, "additional_costs": a
+                }
+                if is_edit:
+                    supabase.table("services").update(payload).eq("id", srv_data['id']).execute()
+                else:
                     supabase.table("services").insert(payload).execute()
-                    log_to_db("INFO", f"Added service: {t}")
-                else: 
-                    supabase.table("services").update(payload).eq("id", data['id']).execute()
-                    log_to_db("INFO", f"Updated service: {t}")
-            except Exception as e:
-                log_to_db("ERROR", f"Service {action} failed: {e}")
-                st.error(f"Error saving service: {e}")
-            st.rerun()
-
-@st.dialog("Sub-Categories")
-def view_main_category_dialog(cat, main_cats, all_cats, all_services):
-    st.markdown(f"### 📁 {cat['name']}")
-    
-    # Action buttons for the main category
-    c1, c2, c3 = st.columns(3)
-    if c1.button("➕ Add Sub-Category", use_container_width=True):
-        category_dialog("Add", main_cats=main_cats, default_parent_id=cat['id'])
-    if c2.button("✏️ Edit Category", use_container_width=True):
-        category_dialog("Edit", data=cat, main_cats=main_cats)
-    if c3.button("🗑️ Delete", use_container_width=True):
-        sub_cats = [c for c in all_cats if c.get('parent_id') == cat['id']]
-        cat_services = [s for s in all_services if s.get('category_id') == cat['id']]
-        if sub_cats or cat_services:
-            st.error("Remove sub-categories and services before deleting.")
-        else:
-            supabase.table("service_categories").delete().eq("id", cat['id']).execute()
-            st.rerun()
-
-    st.divider()
-    
-    # Sub-Categories buttons
-    sub_cats = [c for c in all_cats if c.get('parent_id') == cat['id']]
-    if not sub_cats:
-        st.info("No sub-categories found. Click 'Add Sub-Category' above.")
-    else:
-        st.write("#### Select a Sub-Category:")
-        sc_cols = st.columns(2)
-        for i, scat in enumerate(sub_cats):
-            with sc_cols[i % 2]:
-                # Streamlit magically replaces the dialog if we call another dialog function here!
-                if st.button(f"📂 {scat['name']}", use_container_width=True, key=f"sc_btn_{scat['id']}"):
-                    view_sub_category_dialog(scat, cat, all_cats, all_services, main_cats)
-
-@st.dialog("Services")
-def view_sub_category_dialog(scat, main_cat, all_cats, all_services, main_cats):
-    st.markdown(f"### 📂 {main_cat['name']} > {scat['name']}")
-
-    cat_dict_for_services = {}
-    for c in main_cats: cat_dict_for_services[c['name']] = c['id']
-    for c in all_cats:
-        if c.get('parent_id'):
-            p_name = next((p['name'] for p in main_cats if p['id'] == c['parent_id']), "Unknown")
-            cat_dict_for_services[f"{p_name} -> {c['name']}"] = c['id']
-
-    c1, c2, c3, c4 = st.columns([1, 1.5, 1, 1])
-    if c1.button("⬅️ Back"):
-        view_main_category_dialog(main_cat, main_cats, all_cats, all_services)
-    if c2.button("➕ Add Service"):
-        service_dialog("Add", cat_dict_for_services, default_cat_id=scat['id'])
-    if c3.button("✏️ Edit"):
-        category_dialog("Edit", data=scat, main_cats=main_cats)
-    if c4.button("🗑️ Delete"):
-        scat_services_check = [s for s in all_services if s.get('category_id') == scat['id']]
-        if scat_services_check:
-            st.error("Remove services before deleting.")
-        else:
-            supabase.table("service_categories").delete().eq("id", scat['id']).execute()
-            st.rerun()
-
-    st.divider()
-
-    scat_services = [s for s in all_services if s.get('category_id') == scat['id']]
-    if not scat_services:
-        st.info("No services found in this sub-category.")
-    else:
-        for row in scat_services:
-            with st.container(border=True):
-                cols = st.columns([4, 1, 1])
-                cols[0].write(f"**{row['title']}**<br>£{row['cost']} | {row['duration']} hrs", unsafe_allow_html=True)
-                if cols[1].button("Edit", key=f"es_sub_{row['id']}", use_container_width=True):
-                    service_dialog("Edit", cat_dict_for_services, row)
-                if cols[2].button("Delete", key=f"ds_sub_{row['id']}", use_container_width=True):
-                    supabase.table("services").delete().eq("id", row['id']).execute()
-                    st.rerun()
+                st.session_state.explorer_view = 'services'
+                st.rerun()
 
 @st.dialog("Manage Booking")
 def booking_dialog(action, c_dict, s_dict, data=None):
@@ -368,12 +377,10 @@ with tab3:
     st.header("Service Management")
     
     cat_data = safe_fetch("service_categories")
-    s_data = safe_fetch("services")
-    
     main_cats = [c for c in cat_data if not c.get('parent_id')] if cat_data else []
     
     if st.button("➕ Add Main Category", use_container_width=True): 
-        category_dialog("Add", main_cats=main_cats)
+        add_main_category_dialog()
             
     st.divider()
     
@@ -386,7 +393,7 @@ with tab3:
         for i, cat in enumerate(main_cats):
             with cols[i % 3]:
                 if st.button(f"📁 {cat['name']}", key=f"mc_btn_{cat['id']}", use_container_width=True):
-                    view_main_category_dialog(cat, main_cats, cat_data, s_data)
+                    category_explorer_dialog(cat['id'])
 
 with tab1:
     st.header("Booking Management")
