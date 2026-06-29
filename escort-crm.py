@@ -191,7 +191,7 @@ def message_history_dialog(contact_info, contact_name=None, instance=None, token
                 "contact_info": clean_contact,
                 "direction": "outbound",
                 "message_body": new_message,
-                "status": "sent"
+                "message_status": "sent"
             }).execute()
 
             st.rerun()
@@ -201,7 +201,7 @@ def message_history_dialog(contact_info, contact_name=None, instance=None, token
                 "contact_info": clean_contact,
                 "direction": "outbound",
                 "message_body": new_message,
-                "status": "failed"
+                "message_status": "failed"
             }).execute()
             st.error(f"Failed to send message: {e}")
 
