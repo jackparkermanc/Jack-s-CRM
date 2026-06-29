@@ -85,31 +85,14 @@ def category_explorer_dialog(main_cat_id):
 
     # Setup isolated view state for this specific dialog session
     if st.session_state.get('active_explorer_cat') != main_cat_id:
-        st.session_state.active_explorer_cat = main_cat_id
-        st.session_state.explorer_view = 'sub_cats'
-        st.session_state.explorer_sub_cat = None
-        st.session_state.explorer_service = None
-
-    view = st.session_state.explorer_view
-    scat = st.session_state.explorer_sub_cat
-
-    if view == 'sub_cats':
-        st.markdown(f"### 📁 {main_cat['name']}")
-        c1, c2, c3 = st.columns(3)
-        if c1.button("➕ Add Sub-Category", use_container_width=True):
-            st.session_state.explorer_view = 'add_sub'
-            st.rerun()
-        if c2.button("✏️ Edit Category", use_container_width=True):
-            st.session_state.explorer_view = 'edit_main'
-            st.rerun()
-        if c3.button("🗑️ Delete", use_container_width=True):
-            sub_cats = [c for c in cat_data if c.get('parent_id') == main_cat['id']]
-            cat_services = [s for s in s_data if s.get('category_id') == main_cat['id']]
-            if sub_cats or cat_services:
-                st.error("Remove sub-categories and services before deleting.")
-            else:
-                supabase.table("service_categories").delete().eq("id", main_cat['id']).execute()
-                st.rerun()
+            if c3.button("🗑️ Delete", use_container_width=True):
+                sub_cats = [c for c in cat_data if c.get('parent_id') == main_cat['id']]
+                cat_services = [s for s in s_data if s.get('category_id') == main_cat['id']]
+                if sub_cats or cat_services:
+                    st.error("Remove sub-categories and services before deleting.")
+                else:
+                    supabase.table("service_categories").delete().eq("id", main_cat['id']).execute()
+                    st.rerun()
 
         st.divider()
         sub_cats = [c for c in cat_data if c.get('parent_id') == main_cat['id']]
@@ -123,6 +106,23 @@ def category_explorer_dialog(main_cat_id):
                     if st.button(f"📂 {scat_row['name']}", key=f"sc_btn_{scat_row['id']}", use_container_width=True):
                         st.session_state.explorer_view = 'services'
                         st.session_state.explorer_sub_cat = scat_row
+                        st.rerun()
+
+        main_cat_services = [s for s in s_data if s.get('category_id') == main_cat['id']]
+        if main_cat_services:
+            st.divider()
+            st.write("#### Services Directly in this Category")
+            for row in main_cat_services:
+                with st.container(border=True):
+                    cols = st.columns([4, 1, 1])
+                    cols[0].write(f"**{row['title']}**<br>£{row['cost']} | {row['duration']} hrs", unsafe_allow_html=True)
+                    if cols[1].button("Edit", key=f"es_main_{row['id']}", use_container_width=True):
+                        st.session_state.explorer_service = row
+                        st.session_state.explorer_sub_cat = main_cat 
+                        st.session_state.explorer_view = 'edit_service'
+                        st.rerun()
+                    if cols[2].button("Delete", key=f"ds_main_{row['id']}", use_container_width=True):
+                        supabase.table("services").delete().eq("id", row['id']).execute()
                         st.rerun()
 
     elif view == 'edit_main':
@@ -204,13 +204,35 @@ def category_explorer_dialog(main_cat_id):
         is_edit = (view == 'edit_service')
         srv_data = st.session_state.explorer_service if is_edit else None
         title_prefix = "✏️ Edit" if is_edit else "➕ Add"
-        st.markdown(f"### {title_prefix} Service in {scat['name']}")
+        st.markdown(f"### {title_prefix} Service")
         
         if st.button("⬅️ Back"):
-            st.session_state.explorer_view = 'services'
+            st.session_state.explorer_view = 'services' if scat.get('parent_id') else 'sub_cats'
             st.rerun()
             
+        cat_options = []
+        for c in cat_data:
+            if c.get('parent_id'):
+                parent = next((p for p in cat_data if p['id'] == c['parent_id']), None)
+                p_name = parent['name'] if parent else "Unknown"
+                cat_options.append({"id": c['id'], "label": f"📁 {p_name} > 📂 {c['name']}"})
+            else:
+                cat_options.append({"id": c['id'], "label": f"📁 {c['name']}"})
+                
+        cat_options.sort(key=lambda x: x['label'])
+        cat_labels = [opt['label'] for opt in cat_options]
+        
+        current_cat_id = srv_data['category_id'] if srv_data else scat['id']
+        current_idx = 0
+        for i, opt in enumerate(cat_options):
+            if opt['id'] == current_cat_id:
+                current_idx = i
+                break
+            
         with st.form("service_form"):
+            selected_cat_label = st.selectbox("Location / Category", cat_labels, index=current_idx)
+            selected_cat_id = next(opt['id'] for opt in cat_options if opt['label'] == selected_cat_label)
+            
             t = st.text_input("Title", value=srv_data['title'] if srv_data else "")
             d = st.number_input("Hours", value=float(srv_data['duration']) if srv_data else 0.5, step=0.5)
             c = st.number_input("Cost (£)", value=float(srv_data['cost']) if srv_data else 0.0, step=10.0)
@@ -220,14 +242,14 @@ def category_explorer_dialog(main_cat_id):
             
             if st.form_submit_button("Save"):
                 payload = {
-                    "category_id": scat['id'],
+                    "category_id": selected_cat_id,
                     "title": t, "duration": d, "call_type": ctype, "cost": c, "additional_costs": a
                 }
                 if is_edit:
                     supabase.table("services").update(payload).eq("id", srv_data['id']).execute()
                 else:
                     supabase.table("services").insert(payload).execute()
-                st.session_state.explorer_view = 'services'
+                st.session_state.explorer_view = 'services' if scat.get('parent_id') else 'sub_cats'
                 st.rerun()
 
 @st.dialog("Manage Booking")
