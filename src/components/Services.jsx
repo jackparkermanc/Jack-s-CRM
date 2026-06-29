@@ -1,19 +1,24 @@
 import React, { useState, useEffect } from 'react'
 import { FaPlus, FaEdit, FaTrash, FaChevronRight } from 'react-icons/fa'
-import { servicesAPI, categoriesAPI } from '../lib/api'
+import { servicesAPI, categoriesAPI, addonsAPI } from '../lib/api'
 import CategoryDialog from './dialogs/CategoryDialog'
 import ServiceDialog from './dialogs/ServiceDialog'
+import AddOnDialog from './dialogs/AddOnDialog'
 
 function Services() {
   const [categories, setCategories] = useState([])
   const [services, setServices] = useState([])
+  const [addons, setAddons] = useState([])
   const [loading, setLoading] = useState(true)
   const [selectedMainCat, setSelectedMainCat] = useState(null)
   const [selectedSubCat, setSelectedSubCat] = useState(null)
+  const [selectedService, setSelectedService] = useState(null)
   const [showCatDialog, setShowCatDialog] = useState(false)
   const [showServiceDialog, setShowServiceDialog] = useState(false)
+  const [showAddOnDialog, setShowAddOnDialog] = useState(false)
   const [editingCat, setEditingCat] = useState(null)
   const [editingService, setEditingService] = useState(null)
+  const [editingAddon, setEditingAddon] = useState(null)
   const [catDialogMode, setCatDialogMode] = useState('add')
 
   useEffect(() => {
@@ -33,6 +38,15 @@ function Services() {
       alert('Failed to fetch data: ' + error.message)
     }
     setLoading(false)
+  }
+
+  const fetchAddons = async (serviceId) => {
+    try {
+      const res = await addonsAPI.getAll(serviceId)
+      setAddons(res.data || [])
+    } catch (error) {
+      alert('Failed to fetch add-ons: ' + error.message)
+    }
   }
 
   const mainCategories = categories.filter(c => !c.parent_id)
@@ -109,6 +123,34 @@ function Services() {
         setServices(services.filter(s => s.id !== id))
       } catch (error) {
         alert('Failed to delete service: ' + error.message)
+      }
+    }
+  }
+
+  const handleSaveAddon = async (data) => {
+    if (!selectedService) return
+    try {
+      if (editingAddon) {
+        const res = await addonsAPI.update({ id: editingAddon.id, ...data })
+        setAddons(addons.map(a => a.id === editingAddon.id ? res.data : a))
+      } else {
+        const res = await addonsAPI.create({ service_id: selectedService.id, ...data })
+        setAddons([...addons, res.data])
+      }
+      setShowAddOnDialog(false)
+      setEditingAddon(null)
+    } catch (error) {
+      alert('Failed to save add-on: ' + error.message)
+    }
+  }
+
+  const handleDeleteAddon = async (id) => {
+    if (confirm('Delete this add-on?')) {
+      try {
+        await addonsAPI.delete(id)
+        setAddons(addons.filter(a => a.id !== id))
+      } catch (error) {
+        alert('Failed to delete add-on: ' + error.message)
       }
     }
   }
@@ -206,13 +248,73 @@ function Services() {
                 ) : (
                   <div className="space-y-3">
                     {categoryServices.map(service => (
-                      <div key={service.id} className="card">
-                        <div className="flex justify-between items-start">
-                          <div>
-                            <p className="font-semibold">{service.title}</p>
-                            <p className="text-sm text-gray-600">£{service.cost} | {service.duration}hrs | {service.call_type}</p>
-                          </div>
-                          <div className="flex space-x-2">
+                      <div key={service.id} className="border-2 rounded-lg overflow-hidden" style={{borderColor: selectedService?.id === service.id ? '#2563eb' : '#e5e7eb'}}>
+                        <div className="card cursor-pointer p-0">
+                          <button
+                            onClick={() => {
+                              setSelectedService(service)
+                              fetchAddons(service.id)
+                            }}
+                            className="w-full text-left p-4 hover:bg-gray-50"
+                          >
+                            <div className="flex justify-between items-start">
+                              <div>
+                                <p className="font-semibold">{service.title}</p>
+                                <p className="text-sm text-gray-600">£{service.cost} | {service.duration}hrs | {service.call_type}</p>
+                              </div>
+                            </div>
+                          </button>
+
+                          {selectedService?.id === service.id && (
+                            <div className="border-t border-gray-200 p-4 bg-blue-50">
+                              <div className="flex justify-between items-center mb-3">
+                                <h4 className="font-semibold text-sm">Add-Ons</h4>
+                                <button
+                                  onClick={() => {
+                                    setEditingAddon(null)
+                                    setShowAddOnDialog(true)
+                                  }}
+                                  className="btn-primary px-2 py-1 text-sm flex items-center space-x-1"
+                                >
+                                  <FaPlus className="text-xs" /> <span>Add-On</span>
+                                </button>
+                              </div>
+
+                              {addons.length === 0 ? (
+                                <p className="text-xs text-gray-500 italic">No add-ons yet</p>
+                              ) : (
+                                <div className="space-y-2">
+                                  {addons.map(addon => (
+                                    <div key={addon.id} className="bg-white p-3 rounded-lg flex justify-between items-center">
+                                      <div className="flex-1">
+                                        <p className="text-sm font-medium">{addon.name}</p>
+                                        <p className="text-xs text-gray-600">+£{addon.cost}</p>
+                                      </div>
+                                      <div className="flex space-x-2">
+                                        <button
+                                          onClick={() => {
+                                            setEditingAddon(addon)
+                                            setShowAddOnDialog(true)
+                                          }}
+                                          className="btn-secondary p-2 text-xs"
+                                        >
+                                          <FaEdit />
+                                        </button>
+                                        <button
+                                          onClick={() => handleDeleteAddon(addon.id)}
+                                          className="btn-danger p-2 text-xs"
+                                        >
+                                          <FaTrash />
+                                        </button>
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          )}
+
+                          <div className="border-t border-gray-200 p-4 flex justify-end space-x-2">
                             <button
                               onClick={() => {
                                 setEditingService(service)
@@ -262,6 +364,17 @@ function Services() {
           onClose={() => {
             setShowServiceDialog(false)
             setEditingService(null)
+          }}
+        />
+      )}
+
+      {showAddOnDialog && (
+        <AddOnDialog
+          editingData={editingAddon}
+          onSave={handleSaveAddon}
+          onClose={() => {
+            setShowAddOnDialog(false)
+            setEditingAddon(null)
           }}
         />
       )}

@@ -1,6 +1,7 @@
-import React, { useState } from 'react'
-import { FaTimes } from 'react-icons/fa'
+import React, { useState, useEffect } from 'react'
+import { FaTimes, FaCheck } from 'react-icons/fa'
 import { format, parseISO } from 'date-fns'
+import { addonsAPI } from '../../lib/api'
 
 function BookingDialog({ contacts, services, editingData, onSave, onClose }) {
   const [formData, setFormData] = useState({
@@ -14,9 +15,35 @@ function BookingDialog({ contacts, services, editingData, onSave, onClose }) {
       : '12:00'
   })
 
+  const [availableAddons, setAvailableAddons] = useState([])
+  const [selectedAddons, setSelectedAddons] = useState(editingData?.addon_ids || [])
+
+  useEffect(() => {
+    if (formData.service_id) {
+      fetchAddons(formData.service_id)
+    }
+  }, [formData.service_id])
+
+  const fetchAddons = async (serviceId) => {
+    try {
+      const res = await addonsAPI.getAll(serviceId)
+      setAvailableAddons(res.data || [])
+    } catch (error) {
+      console.error('Failed to fetch add-ons:', error)
+    }
+  }
+
   const handleChange = (e) => {
     const { name, value } = e.target
     setFormData(prev => ({ ...prev, [name]: value }))
+  }
+
+  const toggleAddon = (addonId) => {
+    setSelectedAddons(prev =>
+      prev.includes(addonId)
+        ? prev.filter(id => id !== addonId)
+        : [...prev, addonId]
+    )
   }
 
   const handleSubmit = (e) => {
@@ -34,11 +61,16 @@ function BookingDialog({ contacts, services, editingData, onSave, onClose }) {
       contact_id: parseInt(formData.contact_id),
       service_id: parseInt(formData.service_id),
       booking_datetime,
-      hours: selectedService.duration
+      hours: selectedService.duration,
+      addon_ids: selectedAddons
     })
   }
 
   const selectedService = services.find(s => s.id === parseInt(formData.service_id))
+  const totalAddonCost = selectedAddons.reduce((sum, addonId) => {
+    const addon = availableAddons.find(a => a.id === addonId)
+    return sum + (addon?.cost || 0)
+  }, 0)
 
   return (
     <div className="modal-overlay">
@@ -116,7 +148,45 @@ function BookingDialog({ contacts, services, editingData, onSave, onClose }) {
               <p className="text-sm text-gray-700">
                 ⏱️ <strong>Duration:</strong> {selectedService.duration} hours
               </p>
+              <p className="text-sm text-gray-700 mt-1">
+                💷 <strong>Base Cost:</strong> £{selectedService.cost}
+              </p>
             </div>
+          )}
+
+          {availableAddons.length > 0 && (
+            <div className="border-t border-gray-300 pt-4">
+              <h3 className="font-semibold text-gray-700 mb-3">➕ Add-Ons</h3>
+              <div className="space-y-2 max-h-48 overflow-y-auto">
+                {availableAddons.map(addon => (
+                  <label key={addon.id} className="flex items-center p-2 rounded-lg cursor-pointer hover:bg-gray-50">
+                    <input
+                      type="checkbox"
+                      checked={selectedAddons.includes(addon.id)}
+                      onChange={() => toggleAddon(addon.id)}
+                      className="w-4 h-4 text-blue-600"
+                    />
+                    <span className="ml-3 flex-1 text-sm">
+                      <strong>{addon.name}</strong> <span className="text-gray-600">+£{addon.cost}</span>
+                    </span>
+                    {selectedAddons.includes(addon.id) && (
+                      <FaCheck className="text-green-600 text-sm" />
+                    )}
+                  </label>
+                ))}
+              </div>
+              {selectedAddons.length > 0 && (
+                <div className="mt-3 pt-3 border-t border-gray-200">
+                  <p className="text-sm">
+                    <strong>Add-Ons Total:</strong> £{totalAddonCost}
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
+
+          {availableAddons.length === 0 && selectedService && (
+            <p className="text-xs text-gray-500 italic">No add-ons available for this service</p>
           )}
 
           <div className="flex justify-end space-x-3 pt-4">

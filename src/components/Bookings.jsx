@@ -121,27 +121,39 @@ function Bookings() {
               ) : (
                 <div className="space-y-3">
                   {futureBookings.map(booking => (
-                    <div key={booking.id} className="card flex justify-between items-start">
-                      <div>
-                        <p className="font-semibold">{format(parseISO(booking.booking_datetime), 'yyyy-MM-dd HH:mm')}</p>
-                        <p className="text-sm text-gray-600">{booking.contacts?.name} - {booking.services?.title} ({booking.hours}h)</p>
-                      </div>
-                      <div className="flex space-x-2">
-                        <button
-                          onClick={() => {
-                            setEditingBooking(booking)
-                            setShowDialog(true)
-                          }}
-                          className="btn-secondary p-2"
-                        >
-                          <FaEdit />
-                        </button>
-                        <button
-                          onClick={() => handleDelete(booking.id)}
-                          className="btn-danger p-2"
-                        >
-                          <FaTrash />
-                        </button>
+                    <div key={booking.id} className="card">
+                      <div className="flex justify-between items-start mb-3">
+                        <div className="flex-1">
+                          <p className="font-semibold">{format(parseISO(booking.booking_datetime), 'yyyy-MM-dd HH:mm')}</p>
+                          <p className="text-sm text-gray-600">{booking.contacts?.name} - {booking.services?.title} ({booking.hours}h)</p>
+                          {booking.addons && booking.addons.length > 0 && (
+                            <div className="mt-2 pt-2 border-t border-gray-200">
+                              <p className="text-xs font-semibold text-gray-700 mb-1">➕ Add-Ons:</p>
+                              <div className="text-xs text-gray-600 space-y-1">
+                                {booking.addons.map(addon => (
+                                  <p key={addon.id}>• {addon.name} (+£{addon.cost})</p>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                        <div className="flex space-x-2 ml-4">
+                          <button
+                            onClick={() => {
+                              setEditingBooking(booking)
+                              setShowDialog(true)
+                            }}
+                            className="btn-secondary p-2"
+                          >
+                            <FaEdit />
+                          </button>
+                          <button
+                            onClick={() => handleDelete(booking.id)}
+                            className="btn-danger p-2"
+                          >
+                            <FaTrash />
+                          </button>
+                        </div>
                       </div>
                     </div>
                   ))}
@@ -156,18 +168,30 @@ function Bookings() {
               ) : (
                 <div className="space-y-3">
                   {pastBookings.map(booking => (
-                    <div key={booking.id} className="card flex justify-between items-start opacity-75">
-                      <div>
-                        <p className="font-semibold">{format(parseISO(booking.booking_datetime), 'yyyy-MM-dd HH:mm')}</p>
-                        <p className="text-sm text-gray-600">{booking.contacts?.name} - {booking.services?.title} ({booking.hours}h)</p>
-                      </div>
-                      <div className="flex space-x-2">
-                        <button
-                          onClick={() => handleDelete(booking.id)}
-                          className="btn-danger p-2"
-                        >
-                          <FaTrash />
-                        </button>
+                    <div key={booking.id} className="card opacity-75">
+                      <div className="flex justify-between items-start mb-3">
+                        <div className="flex-1">
+                          <p className="font-semibold">{format(parseISO(booking.booking_datetime), 'yyyy-MM-dd HH:mm')}</p>
+                          <p className="text-sm text-gray-600">{booking.contacts?.name} - {booking.services?.title} ({booking.hours}h)</p>
+                          {booking.addons && booking.addons.length > 0 && (
+                            <div className="mt-2 pt-2 border-t border-gray-200">
+                              <p className="text-xs font-semibold text-gray-700 mb-1">➕ Add-Ons:</p>
+                              <div className="text-xs text-gray-600 space-y-1">
+                                {booking.addons.map(addon => (
+                                  <p key={addon.id}>• {addon.name} (+£{addon.cost})</p>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                        <div className="flex space-x-2 ml-4">
+                          <button
+                            onClick={() => handleDelete(booking.id)}
+                            className="btn-danger p-2"
+                          >
+                            <FaTrash />
+                          </button>
+                        </div>
                       </div>
                     </div>
                   ))}

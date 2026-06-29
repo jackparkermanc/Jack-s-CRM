@@ -28,15 +28,28 @@ export default async function handler(req, res) {
 async function getBookings(req, res) {
   const { data, error } = await supabase
     .from('bookings')
-    .select('*, contacts(name), services(title, cost)')
+    .select(`
+      *,
+      contacts(name),
+      services(title, cost),
+      booking_addons(addon_id, addons(id, name, cost))
+    `)
     .order('booking_datetime', { ascending: false })
 
   if (error) throw error
-  return res.status(200).json(data || [])
+  
+  // Transform data to include addon_ids
+  const transformedData = data.map(booking => ({
+    ...booking,
+    addon_ids: booking.booking_addons?.map(ba => ba.addon_id) || [],
+    addons: booking.booking_addons?.map(ba => ba.addons) || []
+  }))
+  
+  return res.status(200).json(transformedData || [])
 }
 
 async function createBooking(req, res) {
-  const { contact_id, service_id, booking_datetime, hours } = req.body
+  const { contact_id, service_id, booking_datetime, hours, addon_ids = [] } = req.body
 
   if (!contact_id || !service_id || !booking_datetime) {
     return res.status(400).json({ error: 'contact_id, service_id, and booking_datetime are required' })
@@ -53,12 +66,22 @@ async function createBooking(req, res) {
     .select('*, contacts(name), services(title)')
 
   if (error) throw error
+
+  // Add booking add-ons if any
+  if (addon_ids.length > 0) {
+    const addonRecords = addon_ids.map(addon_id => ({
+      booking_id: data[0].id,
+      addon_id
+    }))
+    await supabase.from('booking_addons').insert(addonRecords)
+  }
+
   logToDb('INFO', `Scheduled booking for contact ${contact_id}`)
   return res.status(201).json(data[0])
 }
 
 async function updateBooking(req, res) {
-  const { id, contact_id, service_id, booking_datetime, hours } = req.body
+  const { id, contact_id, service_id, booking_datetime, hours, addon_ids = [] } = req.body
 
   if (!id) {
     return res.status(400).json({ error: 'id is required' })
@@ -76,6 +99,20 @@ async function updateBooking(req, res) {
     .select('*, contacts(name), services(title)')
 
   if (error) throw error
+
+  // Update booking add-ons
+  // First delete existing add-ons
+  await supabase.from('booking_addons').delete().eq('booking_id', id)
+  
+  // Then insert new ones
+  if (addon_ids.length > 0) {
+    const addonRecords = addon_ids.map(addon_id => ({
+      booking_id: id,
+      addon_id
+    }))
+    await supabase.from('booking_addons').insert(addonRecords)
+  }
+
   logToDb('INFO', `Updated booking with id: ${id}`)
   return res.status(200).json(data[0])
 }

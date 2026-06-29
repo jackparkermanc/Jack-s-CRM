@@ -51,4 +51,11 @@ export const callsAPI = {
   sendLink: (data) => api.post('/calls', data)
 }
 
+export const addonsAPI = {
+  getAll: (serviceId) => api.get('/addons', { params: { service_id: serviceId } }),
+  create: (data) => api.post('/addons', data),
+  update: (data) => api.put('/addons', data),
+  delete: (id) => api.delete(`/addons?id=${id}`)
+}
+
 export default api

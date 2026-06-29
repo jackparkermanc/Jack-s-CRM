@@ -137,6 +137,7 @@ Your Supabase database should have the following tables:
 - **contacts** - Client contact information
 - **service_categories** - Service categories (main and sub)
 - **services** - Service offerings with pricing
+- **addons** - Optional add-ons for services (e.g., express booking, extra hours)
 - **bookings** - Scheduled client bookings
 - **messages** - WhatsApp message history
 - **app_logs** - Application activity logs
@@ -162,6 +163,12 @@ All API endpoints are serverless functions in `/api`:
 - `POST /api/categories` - Create category
 - `PUT /api/categories` - Update category
 - `DELETE /api/categories?id=ID` - Delete category
+
+### Add-Ons
+- `GET /api/addons?service_id=ID` - List add-ons for a service
+- `POST /api/addons` - Create add-on
+- `PUT /api/addons` - Update add-on
+- `DELETE /api/addons?id=ID` - Delete add-on
 
 ### Bookings
 - `GET /api/bookings` - List all bookings
