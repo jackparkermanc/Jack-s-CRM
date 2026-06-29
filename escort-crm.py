@@ -134,20 +134,75 @@ def booking_dialog(action, c_dict, s_dict, data=None):
                 supabase.table("bookings").update(payload).eq("id", data['id']).execute()
             st.rerun()
 
-# --- Main Tabs ---
-tab1, tab2, tab3, tab4 = st.tabs(["📖 Bookings", "👥 Contacts", "✨ Services", "💬 Messaging"])
 
-# --- TAB 2: CONTACTS ---
-with tab2:
-    st.header("Contact Management")
-    
-    col1, col2 = st.columns([1, 4])
-    with col1:
-        if st.button("➕ Add New Contact"): 
-            contact_dialog("Add")
-            
-    c_data = safe_fetch("contacts")
-    s_data = safe_fetch("services")
+@st.dialog("Message History")
+def message_history_dialog(contact_info, contact_name=None, instance=None, token=None):
+    clean_contact = "".join(filter(str.isdigit, str(contact_info)))
+    contact_data = safe_fetch("contacts") or []
+    saved_contact = next((c for c in contact_data if "".join(filter(str.isdigit, str(c.get("contact_info", "")))) == clean_contact), None)
+    display_name = contact_name or (saved_contact.get("name") if saved_contact else clean_contact)
+    instance = instance or st.secrets.get("ULTRAMSG_INSTANCE", "YOUR_INSTANCE")
+    token = token or st.secrets.get("ULTRAMSG_TOKEN", "YOUR_TOKEN")
+
+    st.subheader(f"Message History with {display_name}")
+
+    if saved_contact is None:
+        st.warning("This number is not saved as a contact in the CRM.")
+        save_name = st.text_input("Contact name", value="", key=f"save_contact_name_{clean_contact}")
+        if st.button("Save number as contact", key=f"save_contact_button_{clean_contact}"):
+            if not save_name.strip():
+                st.error("Please enter a contact name before saving.")
+            else:
+                supabase.table("contacts").insert({
+                    "name": save_name.strip(),
+                    "contact_info": clean_contact
+                }).execute()
+                st.success("Number saved to CRM.")
+                st.rerun()
+
+    history = supabase.table("messages").select("*").eq("contact_info", clean_contact).order("timestamp", desc=False).execute().data or []
+    if not history:
+        st.info("No message history for this contact.")
+    else:
+        for msg in history:
+            icon = get_status_icon(msg.get("status") or msg.get("message_status") or "")
+            message_text = msg.get('message_body', '')
+            if icon:
+                message_text = f"{message_text} {icon}"
+            if msg.get('direction') == "inbound":
+                st.chat_message("user", avatar="👤").write(message_text)
+            else:
+                st.chat_message("assistant", avatar="💼").write(message_text)
+
+    if new_message := st.chat_input("Type your message here..."):
+        try:
+            url = f"https://api.ultramsg.com/{instance}/messages/chat"
+            payload = {
+                "token": token,
+                "to": f"{clean_contact}@c.us",
+                "body": new_message
+            }
+            response = requests.post(url, data=payload)
+            response.raise_for_status()
+
+            supabase.table("messages").insert({
+                "contact_info": clean_contact,
+                "direction": "outbound",
+                "message_body": new_message,
+                "status": "sent"
+            }).execute()
+
+            st.rerun()
+
+        except Exception as e:
+            supabase.table("messages").insert({
+                "contact_info": clean_contact,
+                "direction": "outbound",
+                "message_body": new_message,
+                "status": "failed"
+            }).execute()
+            st.error(f"Failed to send message: {e}")
+
     
     if c_data:
         c_dict_display = {f"{c['name']} ({c['contact_info']})": c for c in c_data}
@@ -278,16 +333,6 @@ with tab4:
     
     c_data = safe_fetch("contacts")
     contacts = {"".join(filter(str.isdigit, str(c["contact_info"]))): c for c in c_data} if c_data else {}
-    if "selected_message_contact" not in st.session_state:
-        st.session_state["selected_message_contact"] = None
-    if "last_seen_messages" not in st.session_state:
-        st.session_state["last_seen_messages"] = {}
-    if "message_feedback" not in st.session_state:
-        st.session_state["message_feedback"] = ""
-
-    if st.session_state["message_feedback"]:
-        st.info(st.session_state["message_feedback"])
-        st.session_state["message_feedback"] = ""
 
     st.subheader("Start or Continue Chat")
     chat_options = [f"{c['name']} ({contact_info})" for contact_info, c in contacts.items()]
@@ -303,13 +348,14 @@ with tab4:
     else:
         target_number = selected_target_label.split("(")[-1].rstrip(")")
 
-    if st.button("Start Chat", key="start_chat"):
+    def open_chat(contact_info, contact_name=None):
+        message_history_dialog(contact_info, contact_name, ULTRAMSG_INSTANCE, ULTRAMSG_TOKEN)
+
+    if st.button("Open Chat", key="start_chat"):
         if not target_number:
             st.error("Enter a valid phone number to start chat.")
         else:
-            st.session_state["selected_message_contact"] = target_number
-            st.session_state["message_feedback"] = f"Started chat with {selected_target_label}."
-            st.rerun()
+            open_chat(target_number, selected_target_label if selected_target_label != "New number" else None)
 
     def parse_timestamp(ts):
         if not ts:
@@ -358,66 +404,4 @@ with tab4:
             row[1].write(f"{direction}: {snippet}")
             row[2].markdown(f"{status_icon}")
             if row[3].button("Open", key=f"recent_{contact_info}"):
-                st.session_state["selected_message_contact"] = contact_info
-                st.session_state["message_feedback"] = f"Opened history for {contact.get('name', contact_info)}."
-                st.rerun()
-
-    selected_contact = st.session_state["selected_message_contact"]
-    if selected_contact:
-        contact = contacts.get(selected_contact, {"name": selected_contact})
-        st.divider()
-        st.subheader(f"Message History with {contact.get('name')}")
-        if st.button("← Back to Recent Messages", type="secondary"):
-            st.session_state["selected_message_contact"] = None
-            st.session_state["message_feedback"] = "Returned to recent messages."
-            st.rerun()
-
-            if selected_contact not in contacts:
-                st.warning("This number is not saved as a contact in the CRM.")
-                save_name = st.text_input("Contact name", value="", key="save_contact_name")
-                if st.button("Save number as contact", key="save_contact_button"):
-                    if not save_name.strip():
-                        st.error("Please enter a contact name before saving.")
-                    else:
-                        clean_number = "".join(filter(str.isdigit, selected_contact))
-                        supabase.table("contacts").insert({
-                            "name": save_name.strip(),
-                            "contact_info": clean_number
-                        }).execute()
-                        contacts[clean_number] = {"name": save_name.strip(), "contact_info": clean_number}
-                        st.success("Number saved to CRM.")
-                        st.session_state["message_feedback"] = f"Saved {save_name.strip()} to contacts."
-                        st.rerun()
-
-                    st.chat_message("user", avatar="👤").write(message_text)
-                else:
-                    st.chat_message("assistant", avatar="💼").write(message_text)
-
-        if new_message := st.chat_input("Type your message here..."):
-            try:
-                url = f"https://api.ultramsg.com/{ULTRAMSG_INSTANCE}/messages/chat"
-                payload = {
-                    "token": ULTRAMSG_TOKEN,
-                    "to": f"{selected_contact}@c.us",
-                    "body": new_message
-                }
-                response = requests.post(url, data=payload)
-                response.raise_for_status()
-
-                supabase.table("messages").insert({
-                    "contact_info": selected_contact,
-                    "direction": "outbound",
-                    "message_body": new_message,
-                    "status": "sent"
-                }).execute()
-
-                st.rerun()
-
-            except Exception as e:
-                supabase.table("messages").insert({
-                    "contact_info": selected_contact,
-                    "direction": "outbound",
-                    "message_body": new_message,
-                    "status": "failed"
-                }).execute()
-                st.error(f"Failed to send message: {e}")
+                open_chat(contact_info, contact.get('name', contact_info))
