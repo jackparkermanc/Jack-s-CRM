@@ -57,6 +57,8 @@ def auto_refresh_messages(interval_seconds: int = 30, key: str = "messages_refre
 st.set_page_config(page_title="Jack's CRM", layout="wide")
 st.title("Jacks's CRM")
 
+tab1, tab2, tab3, tab4 = st.tabs(["Bookings", "Contacts", "Services", "Messaging"])
+
 # --- Dialogs (Popups) ---
 @st.dialog("Manage Contact")
 def contact_dialog(action, data=None):
