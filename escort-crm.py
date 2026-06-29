@@ -1,11 +1,11 @@
 import streamlit as st
 import pandas as pd
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import date, datetime, time
 import time as time_module
 import requests
 from supabase import create_client, Client
+import streamlit.components.v1 as components
 
-# --- Setup ---
 @st.cache_resource
 def init_connection() -> Client:
     url = st.secrets["SUPABASE_URL"]
@@ -14,87 +14,52 @@ def init_connection() -> Client:
 
 supabase = init_connection()
 
-# --- Utility Functions ---
-def safe_fetch(table, select_query="*"):
+def log_to_db(level, message):
+    """Safely logs system events to the app_logs table."""
+    try:
+        supabase.table("app_logs").insert({"source": "Streamlit_App", "level": level, "message": message}).execute()
+    except Exception:
+        pass # Fail silently if logging fails to prevent app crashes
+
+def safe_fetch(table, select_query="*", order_col=None, order_desc=False):
+    """Fetches data with a 3-try retry mechanism to handle network blips."""
     for i in range(3):
         try:
-            response = supabase.table(table).select(select_query).execute()
+            query = supabase.table(table).select(select_query)
+            if order_col:
+                query = query.order(order_col, desc=order_desc)
+            response = query.execute()
             return response.data
         except Exception as e:
             if i == 2:
+                log_to_db("ERROR", f"Failed to fetch data from '{table}'. Error: {e}")
                 st.error(f"⚠️ Failed to fetch data from '{table}'. Error: {e}")
             time_module.sleep(1)
     return []
 
+st.set_page_config(page_title="Business CRM", layout="wide")
+st.title("Business CRM")
 
-def get_status_icon(status: str) -> str:
-    if not status:
-        return ""
-    status_map = {
-        "failed": "🚫",
-        "unsent": "🚫",
-        "pending": "🚫",
-        "sent": "📤",
-        "delivered": "📫",
-        "read": "✅",
-    }
-    return status_map.get(str(status).strip().lower(), "")
-
-
-def insert_message_record(contact_info, direction, message_body, status=None):
-    base_payload = {
-        "contact_info": contact_info,
-        "direction": direction,
-        "message_body": message_body,
-    }
-
-    if status is not None:
-        for status_field in ["message_status", "status"]:
-            try:
-                payload = base_payload.copy()
-                payload[status_field] = status
-                supabase.table("messages").insert(payload).execute()
-                return
-            except Exception:
-                pass
-
-    try:
-        supabase.table("messages").insert(base_payload).execute()
-    except Exception as e:
-        st.error(f"Failed to insert message record: {e}")
-
-
-def auto_refresh_messages(interval_seconds: int = 30, key: str = "messages_refresh"):
-    refresh_func = getattr(st, "autorefresh", None) or getattr(st, "st_autorefresh", None)
-    if callable(refresh_func):
-        refresh_func(interval=interval_seconds * 1000, limit=None, key=key)
-    else:
-        if key not in st.session_state:
-            st.session_state[key] = time_module.time()
-        now = time_module.time()
-        if now - st.session_state[key] >= interval_seconds:
-            st.session_state[key] = now
-            st.rerun()
-
-
-st.set_page_config(page_title="Jack's CRM", layout="wide")
-st.title("Jacks's CRM")
-
-tab1, tab2, tab3, tab4 = st.tabs(["Bookings", "Contacts", "Services", "Messaging"])
-
-# --- Dialogs (Popups) ---
 @st.dialog("Manage Contact")
 def contact_dialog(action, data=None):
     with st.form("c_form"):
         name = st.text_input("Name", value=data['name'] if data else "")
         info = st.text_input("WhatsApp Number (e.g., 447123456789)", value=data['contact_info'] if data else "")
         notes = st.text_area("Interaction Notes", value=data.get('last_notes', '') if data else "")
+        
         if st.form_submit_button("Submit"):
+            # Strip all non-numeric characters to ensure clean WhatsApp API requests
             clean_info = "".join(filter(str.isdigit, str(info)))
-            if action == "Add":
-                supabase.table("contacts").insert({"name": name, "contact_info": clean_info, "last_notes": notes}).execute()
-            else:
-                supabase.table("contacts").update({"name": name, "contact_info": clean_info, "last_notes": notes}).eq("id", data['id']).execute()
+            try:
+                if action == "Add":
+                    supabase.table("contacts").insert({"name": name, "contact_info": clean_info, "last_notes": notes}).execute()
+                    log_to_db("INFO", f"Added contact: {name}")
+                else:
+                    supabase.table("contacts").update({"name": name, "contact_info": clean_info, "last_notes": notes}).eq("id", data['id']).execute()
+                    log_to_db("INFO", f"Updated contact: {name}")
+            except Exception as e:
+                log_to_db("ERROR", f"Contact {action} failed: {e}")
+                st.error(f"Error saving contact: {e}")
             st.rerun()
 
 @st.dialog("Manage Service")
@@ -110,10 +75,16 @@ def service_dialog(action, data=None):
         
         if st.form_submit_button("Submit"):
             payload = {"title": t, "duration": d, "call_type": ctype, "cost": c, "additional_costs": a}
-            if action == "Add": 
-                supabase.table("services").insert(payload).execute()
-            else: 
-                supabase.table("services").update(payload).eq("id", data['id']).execute()
+            try:
+                if action == "Add": 
+                    supabase.table("services").insert(payload).execute()
+                    log_to_db("INFO", f"Added service: {t}")
+                else: 
+                    supabase.table("services").update(payload).eq("id", data['id']).execute()
+                    log_to_db("INFO", f"Updated service: {t}")
+            except Exception as e:
+                log_to_db("ERROR", f"Service {action} failed: {e}")
+                st.error(f"Error saving service: {e}")
             st.rerun()
 
 @st.dialog("Manage Booking")
@@ -122,6 +93,7 @@ def booking_dialog(action, c_dict, s_dict, data=None):
         c_names = list(c_dict.keys())
         s_names = list(s_dict.keys())
         
+        # Pre-fill dropdowns if editing an existing booking
         c_idx = 0
         s_idx = 0
         if data:
@@ -135,6 +107,8 @@ def booking_dialog(action, c_dict, s_dict, data=None):
         
         default_date = date.today()
         default_time = time(12, 0)
+        
+        # Handle Supabase ISO datetime parsing
         if data and 'booking_datetime' in data:
             dt_str = data['booking_datetime'].replace("Z", "+00:00")
             parsed_dt = datetime.fromisoformat(dt_str)
@@ -153,80 +127,31 @@ def booking_dialog(action, c_dict, s_dict, data=None):
                 "booking_datetime": dt, 
                 "hours": b_hours
             }
-            if action == "Add":
-                supabase.table("bookings").insert(payload).execute()
-            else:
-                supabase.table("bookings").update(payload).eq("id", data['id']).execute()
+            try:
+                if action == "Add":
+                    supabase.table("bookings").insert(payload).execute()
+                    log_to_db("INFO", f"Scheduled booking for {c_sel}")
+                else:
+                    supabase.table("bookings").update(payload).eq("id", data['id']).execute()
+                    log_to_db("INFO", f"Updated booking for {c_sel}")
+            except Exception as e:
+                log_to_db("ERROR", f"Booking {action} failed: {e}")
+                st.error(f"Error saving booking: {e}")
             st.rerun()
 
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["📖 Bookings", "👥 Contacts", "✨ Services", "💬 Messaging", "📊 System Logs"])
 
-@st.dialog("Message History")
-def message_history_dialog(contact_info, contact_name=None, instance=None, token=None):
-    clean_contact = "".join(filter(str.isdigit, str(contact_info)))
-    contact_data = safe_fetch("contacts") or []
-    saved_contact = next((c for c in contact_data if "".join(filter(str.isdigit, str(c.get("contact_info", "")))) == clean_contact), None)
-    display_name = contact_name or (saved_contact.get("name") if saved_contact else clean_contact)
-    instance = instance or st.secrets.get("ULTRAMSG_INSTANCE", "YOUR_INSTANCE")
-    token = token or st.secrets.get("ULTRAMSG_TOKEN", "YOUR_TOKEN")
-
-    st.subheader(f"Message History with {display_name}")
-
-    if saved_contact is None:
-        st.warning("This number is not saved as a contact in the CRM.")
-        save_name = st.text_input("Contact name", value="", key=f"save_contact_name_{clean_contact}")
-        if st.button("Save number as contact", key=f"save_contact_button_{clean_contact}"):
-            if not save_name.strip():
-                st.error("Please enter a contact name before saving.")
-            else:
-                supabase.table("contacts").insert({
-                    "name": save_name.strip(),
-                    "contact_info": clean_contact
-                }).execute()
-                st.success("Number saved to CRM.")
-                st.rerun()
-
-    history_raw = supabase.table("messages").select("*").order("timestamp", desc=False).execute().data or []
-    history = [
-        msg for msg in history_raw
-        if "".join(filter(str.isdigit, str(msg.get("contact_info", "")))) == clean_contact
-    ]
-    if not history:
-        st.info("No message history for this contact.")
-    else:
-        for msg in history:
-            icon = get_status_icon(msg.get("status") or msg.get("message_status") or "")
-            message_text = msg.get('message_body', '')
-            if icon:
-                message_text = f"{message_text} {icon}"
-            if msg.get('direction') == "inbound":
-                st.chat_message("user", avatar="👤").write(message_text)
-            else:
-                st.chat_message("assistant", avatar="💼").write(message_text)
-
-    if new_message := st.chat_input("Type your message here..."):
-        try:
-            url = f"https://api.ultramsg.com/{instance}/messages/chat"
-            payload = {
-                "token": token,
-                "to": f"{clean_contact}@c.us",
-                "body": new_message
-            }
-            response = requests.post(url, data=payload)
-            response.raise_for_status()
-
-            insert_message_record(clean_contact, "outbound", new_message, "sent")
-
-            st.rerun()
-
-        except Exception as e:
-            insert_message_record(clean_contact, "outbound", new_message, "failed")
-            st.error(f"Failed to send message: {e}")
-
-    
 with tab2:
     st.header("Contact Management")
+    
+    col1, col2 = st.columns([1, 4])
+    with col1:
+        if st.button("➕ Add New Contact"): 
+            contact_dialog("Add")
+            
     c_data = safe_fetch("contacts")
-
+    s_data = safe_fetch("services")
+    
     if c_data:
         c_dict_display = {f"{c['name']} ({c['contact_info']})": c for c in c_data}
         selected_name = st.selectbox("Select a Contact to view details", options=list(c_dict_display.keys()))
@@ -244,11 +169,13 @@ with tab2:
                 contact_dialog("Edit", selected_contact)
             if st.button("🗑️ Delete Contact", use_container_width=True):
                 supabase.table("contacts").delete().eq("id", selected_contact['id']).execute()
+                log_to_db("INFO", f"Deleted contact: {selected_contact['name']}")
                 st.rerun()
                 
         st.divider()
         st.subheader("Client Bookings")
         
+        # Filter bookings specifically for the selected contact
         bookings_data = safe_fetch("bookings", "*, services(title, cost)")
         contact_bookings = [b for b in bookings_data if b['contact_id'] == selected_contact['id']] if bookings_data else []
         
@@ -283,6 +210,7 @@ with tab2:
                     booking_dialog("Edit", c_mapping, s_mapping, b)
                 if bc3.button("Delete", key=f"db_f_{b['id']}"):
                     supabase.table("bookings").delete().eq("id", b['id']).execute()
+                    log_to_db("INFO", f"Deleted future booking ID {b['id']}")
                     st.rerun()
 
         st.write("### Past Bookings")
@@ -297,11 +225,11 @@ with tab2:
                     booking_dialog("Edit", c_mapping, s_mapping, b)
                 if bc3.button("Delete", key=f"db_p_{b['id']}"):
                     supabase.table("bookings").delete().eq("id", b['id']).execute()
+                    log_to_db("INFO", f"Deleted past booking ID {b['id']}")
                     st.rerun()
     else:
         st.info("No contacts found. Add one above.")
 
-# --- TAB 3: SERVICES ---
 with tab3:
     st.header("Service Management")
     if st.button("➕ Add New Service"): 
@@ -316,11 +244,11 @@ with tab3:
                 service_dialog("Edit", row)
             if cols[2].button("Delete", key=f"ds{row['id']}"):
                 supabase.table("services").delete().eq("id", row['id']).execute()
+                log_to_db("INFO", f"Deleted service: {row['title']}")
                 st.rerun()
     elif s_data == []:
         st.info("No services found. Add one above.")
 
-# --- TAB 1: BOOKINGS ---
 with tab1:
     st.header("Booking Management")
     c_data = safe_fetch("contacts")
@@ -329,6 +257,8 @@ with tab1:
     if c_data and s_data:
         if st.button("➕ Schedule Booking"): 
             booking_dialog("Add", {c['name']: c['id'] for c in c_data}, {s['title']: s['id'] for s in s_data})
+    elif c_data == [] or s_data == []:
+        st.warning("Please add at least one Contact and one Service before scheduling a booking.")
     
     bookings = safe_fetch("bookings", "*, contacts(name), services(title)")
     if bookings:
@@ -346,85 +276,128 @@ with tab1:
     elif bookings == []:
         st.info("No bookings found.")
 
-# --- TAB 4: MESSAGING ---
 with tab4:
-    st.header("Direct Messaging")
-    auto_refresh_messages(30, key="messages_refresh")
+    st.header("Direct Messaging & Calls")
     
     ULTRAMSG_INSTANCE = st.secrets.get("ULTRAMSG_INSTANCE", "YOUR_INSTANCE")
     ULTRAMSG_TOKEN = st.secrets.get("ULTRAMSG_TOKEN", "YOUR_TOKEN")
     
     c_data = safe_fetch("contacts")
-    contacts = {"".join(filter(str.isdigit, str(c["contact_info"]))): c for c in c_data} if c_data else {}
+    if c_data:
+        msg_dict = {f"{c['name']} ({c['contact_info']})": c['contact_info'] for c in c_data}
+        sel = st.selectbox("Select Contact", options=list(msg_dict.keys()))
+        target_number = msg_dict[sel]
+        
+        clean_target = "".join(filter(str.isdigit, str(target_number)))
+        
+        # Jitsi Video Integration
+        with st.expander("📹 Video / Voice Call (Jitsi Meet)"):
+            room_url = f"https://meet.jit.si/CRM_Meeting_{clean_target}"
+            
+            if st.button("📤 Send Call Link via WhatsApp"):
+                try:
+                    url = f"https://api.ultramsg.com/{ULTRAMSG_INSTANCE}/messages/chat"
+                    payload = {
+                        "token": ULTRAMSG_TOKEN,
+                        "to": f"{clean_target}@c.us",
+                        "body": f"Please join my secure video call here: {room_url}"
+                    }
+                    response = requests.post(url, data=payload)
+                    response.raise_for_status()
+                    
+                    supabase.table("messages").insert({
+                        "contact_info": clean_target,
+                        "direction": "outbound",
+                        "message_body": f"Please join my secure video call here: {room_url}"
+                    }).execute()
+                    
+                    log_to_db("INFO", f"Sent Jitsi link to {clean_target}")
+                    st.success("Link sent successfully!")
+                    time_module.sleep(1)
+                    st.rerun()
+                except Exception as e:
+                    log_to_db("ERROR", f"Failed to send Jitsi link: {e}")
+                    st.error(f"Failed to send link: {e}")
 
-    st.subheader("Start or Continue Chat")
-    chat_options = [f"{c['name']} ({contact_info})" for contact_info, c in contacts.items()]
-    chat_options.append("New number")
-    selected_target_label = st.selectbox("Choose a saved contact or start a new number", options=chat_options)
+            st.write("Join the call below:")
+            components.html(
+                f"""
+                <iframe allow="camera; microphone; fullscreen; display-capture; autoplay" 
+                        src="{room_url}" 
+                        style="height: 600px; width: 100%; border: 0px; border-radius: 8px;">
+                </iframe>
+                """,
+                height=600,
+            )
 
-    new_number_input = ""
-    if selected_target_label == "New number":
-        new_number_input = st.text_input("Enter phone number", value="", placeholder="447123456789")
+        # Chat History Integration (Fixed to filter correctly at the database level)
+        try:
+            chat_history = supabase.table("messages").select("*").eq("contact_info", clean_target).order("timestamp", desc=False).execute().data
+        except Exception as e:
+            chat_history = []
+            log_to_db("ERROR", f"Failed to load chat history: {e}")
+        
+        st.divider()
+        st.subheader(f"Chat History with {sel.split(' (')[0]}")
+        
+        if st.button("🔄 Refresh Messages"):
+            st.rerun()
 
-    if selected_target_label == "New number":
-        target_number = "".join(filter(str.isdigit, str(new_number_input)))
-    else:
-        target_number = selected_target_label.split("(")[-1].rstrip(")")
-
-    def open_chat(contact_info, contact_name=None):
-        message_history_dialog(contact_info, contact_name, ULTRAMSG_INSTANCE, ULTRAMSG_TOKEN)
-
-    if st.button("Open Chat", key="start_chat"):
-        if not target_number:
-            st.error("Enter a valid phone number to start chat.")
-        else:
-            open_chat(target_number, selected_target_label if selected_target_label != "New number" else None)
-
-    def parse_timestamp(ts):
-        if not ts:
-            return None
-        if isinstance(ts, str):
+        chat_container = st.container(height=400)
+        with chat_container:
+            if not chat_history:
+                st.info("No messages yet.")
+            for msg in chat_history:
+                if msg['direction'] == "inbound":
+                    st.chat_message("user", avatar="👤").write(msg['message_body'])
+                else:
+                    st.chat_message("assistant", avatar="💼").write(msg['message_body'])
+        
+        if new_message := st.chat_input("Type your message here..."):
             try:
-                parsed = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-            except ValueError:
-                return None
-        elif isinstance(ts, datetime):
-            parsed = ts
-        else:
-            return None
-        if parsed.tzinfo is not None:
-            parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
-        return parsed
-
-    all_messages = supabase.table("messages").select("*").order("timestamp", desc=False).execute().data or []
-    cutoff = datetime.utcnow() - timedelta(days=3)
-    recent_messages = [msg for msg in all_messages if parse_timestamp(msg.get("timestamp")) and parse_timestamp(msg.get("timestamp")) >= cutoff]
-
-    recent_by_contact = {}
-    for msg in recent_messages:
-        contact_info = "".join(filter(str.isdigit, str(msg.get("contact_info", ""))))
-        if contact_info not in recent_by_contact:
-            recent_by_contact[contact_info] = []
-        recent_by_contact[contact_info].append(msg)
-
-    st.subheader("Recent Messages")
-    if not recent_by_contact:
-        st.info("No recent messages from the last 3 days.")
+                # Send via Ultramsg
+                url = f"https://api.ultramsg.com/{ULTRAMSG_INSTANCE}/messages/chat"
+                payload = {
+                    "token": ULTRAMSG_TOKEN,
+                    "to": f"{clean_target}@c.us",
+                    "body": new_message
+                }
+                response = requests.post(url, data=payload)
+                response.raise_for_status()
+                
+                # Save outgoing message to DB
+                supabase.table("messages").insert({
+                    "contact_info": clean_target,
+                    "direction": "outbound",
+                    "message_body": new_message
+                }).execute()
+                
+                log_to_db("INFO", f"Sent message to {clean_target}")
+                st.rerun() 
+                
+            except Exception as e:
+                log_to_db("ERROR", f"Failed to send message: {e}")
+                st.error(f"Failed to send message: {e}")
+                
     else:
-        for contact_info, messages in recent_by_contact.items():
-            contact = contacts.get(contact_info, {"name": contact_info})
-            latest = max(messages, key=lambda x: parse_timestamp(x.get("timestamp")) or datetime.min)
-            status_icon = get_status_icon(latest.get("status") or latest.get("message_status") or "")
-            direction = "You" if latest.get("direction") == "outbound" else contact.get("name", "Contact")
-            snippet = latest.get("message_body", "")
-            if len(snippet) > 60:
-                snippet = snippet[:57] + "..."
-            message_time = parse_timestamp(latest.get("timestamp"))
-            time_str = message_time.strftime("%Y-%m-%d %H:%M") if message_time else ""
+        st.info("Please add contacts in the Contact Management tab first.")
 
-            row = st.columns([3, 4, 1, 1])
-            row[0].markdown(f"**{contact.get('name', contact_info)}**<br><span style='color: gray;'>{time_str}</span>", unsafe_allow_html=True)
-            row[1].write(f"{direction}: {snippet}")
-            row[2].markdown(f"{status_icon}")
-            if row[3].button("Open", key=f"recent_{contact_info}"):
-                open_chat(contact_info, contact.get('name', contact_info))
+with tab5:
+    st.header("System Logs")
+    
+    col1, col2 = st.columns([1, 4])
+    with col1:
+        if st.button("🔄 Refresh Logs"):
+            st.rerun()
+    with col2:
+        if st.button("🗑️ Clear Logs"):
+            supabase.table("app_logs").delete().neq("id", 0).execute()
+            st.rerun()
+
+    logs_data = safe_fetch("app_logs", "*", order_col="created_at", order_desc=True)
+    if logs_data:
+        logs_df = pd.DataFrame(logs_data)
+        logs_df['created_at'] = pd.to_datetime(logs_df['created_at']).dt.strftime('%Y-%m-%d %H:%M:%S')
+        st.dataframe(logs_df[['created_at', 'source', 'level', 'message']], use_container_width=True)
+    else:
+        st.info("No logs recorded yet.")
