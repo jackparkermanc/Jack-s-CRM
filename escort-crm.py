@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta, timezone
 import time as time_module
 import requests
 from supabase import create_client, Client
@@ -25,6 +25,34 @@ def safe_fetch(table, select_query="*"):
                 st.error(f"⚠️ Failed to fetch data from '{table}'. Error: {e}")
             time_module.sleep(1)
     return []
+
+
+def get_status_icon(status: str) -> str:
+    if not status:
+        return ""
+    status_map = {
+        "failed": "🚫",
+        "unsent": "🚫",
+        "pending": "🚫",
+        "sent": "📤",
+        "delivered": "📫",
+        "read": "✅",
+    }
+    return status_map.get(str(status).strip().lower(), "")
+
+
+def auto_refresh_messages(interval_seconds: int = 30, key: str = "messages_refresh"):
+    refresh_func = getattr(st, "autorefresh", None) or getattr(st, "st_autorefresh", None)
+    if callable(refresh_func):
+        refresh_func(interval=interval_seconds * 1000, limit=None, key=key)
+    else:
+        if key not in st.session_state:
+            st.session_state[key] = time_module.time()
+        now = time_module.time()
+        if now - st.session_state[key] >= interval_seconds:
+            st.session_state[key] = now
+            st.experimental_rerun()
+
 
 st.set_page_config(page_title="Jack's CRM", layout="wide")
 st.title("Jacks's CRM")
@@ -243,54 +271,119 @@ with tab1:
 # --- TAB 4: MESSAGING ---
 with tab4:
     st.header("Direct Messaging")
+    auto_refresh_messages(30, key="messages_refresh")
     
     ULTRAMSG_INSTANCE = st.secrets.get("ULTRAMSG_INSTANCE", "YOUR_INSTANCE")
     ULTRAMSG_TOKEN = st.secrets.get("ULTRAMSG_TOKEN", "YOUR_TOKEN")
     
     c_data = safe_fetch("contacts")
     if c_data:
-        msg_dict = {f"{c['name']} ({c['contact_info']})": c['contact_info'] for c in c_data}
-        sel = st.selectbox("Select Contact", options=list(msg_dict.keys()))
-        target_number = msg_dict[sel]
-        
-        clean_target = "".join(filter(str.isdigit, str(target_number)))
-        
-        chat_history = supabase.table("messages").select("*").eq("contact_info", clean_target).order("timestamp", desc=False).execute().data
-        
-        st.divider()
-        st.subheader(f"Chat History with {sel.split(' (')[0]}")
-        
-        chat_container = st.container(height=400)
-        with chat_container:
-            if not chat_history:
-                st.info("No messages yet.")
-            for msg in chat_history:
-                if msg['direction'] == "inbound":
-                    st.chat_message("user", avatar="👤").write(msg['message_body'])
-                else:
-                    st.chat_message("assistant", avatar="💼").write(msg['message_body'])
-        
-        if new_message := st.chat_input("Type your message here..."):
-            try:
-                url = f"https://api.ultramsg.com/{ULTRAMSG_INSTANCE}/messages/chat"
-                payload = {
-                    "token": ULTRAMSG_TOKEN,
-                    "to": f"{clean_target}@c.us",
-                    "body": new_message
-                }
-                response = requests.post(url, data=payload)
-                response.raise_for_status()
-                
-                supabase.table("messages").insert({
-                    "contact_info": clean_target,
-                    "direction": "outbound",
-                    "message_body": new_message
-                }).execute()
-                
-                st.rerun() 
-                
-            except Exception as e:
-                st.error(f"Failed to send message: {e}")
-                
+        if "selected_message_contact" not in st.session_state:
+            st.session_state["selected_message_contact"] = None
+        if "last_seen_messages" not in st.session_state:
+            st.session_state["last_seen_messages"] = {}
+
+        def parse_timestamp(ts):
+            if not ts:
+                return None
+            if isinstance(ts, str):
+                try:
+                    parsed = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                except ValueError:
+                    return None
+            elif isinstance(ts, datetime):
+                parsed = ts
+            else:
+                return None
+            if parsed.tzinfo is not None:
+                parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+            return parsed
+
+        all_messages = supabase.table("messages").select("*").order("timestamp", desc=False).execute().data or []
+        cutoff = datetime.utcnow() - timedelta(days=3)
+        recent_messages = [msg for msg in all_messages if parse_timestamp(msg.get("timestamp")) and parse_timestamp(msg.get("timestamp")) >= cutoff]
+
+        contacts = {"".join(filter(str.isdigit, str(c["contact_info"]))): c for c in c_data}
+        recent_by_contact = {}
+        for msg in recent_messages:
+            contact_info = "".join(filter(str.isdigit, str(msg.get("contact_info", ""))))
+            if contact_info not in recent_by_contact:
+                recent_by_contact[contact_info] = []
+            recent_by_contact[contact_info].append(msg)
+
+        st.subheader("Recent Messages")
+        if not recent_by_contact:
+            st.info("No recent messages from the last 3 days.")
+        else:
+            for contact_info, messages in recent_by_contact.items():
+                contact = contacts.get(contact_info, {"name": contact_info})
+                latest = max(messages, key=lambda x: parse_timestamp(x.get("timestamp")) or datetime.min)
+                status_icon = get_status_icon(latest.get("status") or latest.get("message_status") or "")
+                direction = "You" if latest.get("direction") == "outbound" else contact.get("name", "Contact")
+                snippet = latest.get("message_body", "")
+                if len(snippet) > 60:
+                    snippet = snippet[:57] + "..."
+                message_time = parse_timestamp(latest.get("timestamp"))
+                time_str = message_time.strftime("%Y-%m-%d %H:%M") if message_time else ""
+
+                row = st.columns([3, 4, 1, 1])
+                row[0].markdown(f"**{contact.get('name', contact_info)}**<br><span style='color: gray;'>{time_str}</span>", unsafe_allow_html=True)
+                row[1].write(f"{direction}: {snippet}")
+                row[2].markdown(f"{status_icon}")
+                if row[3].button("Open", key=f"recent_{contact_info}"):
+                    st.session_state["selected_message_contact"] = contact_info
+                    st.experimental_rerun()
+
+        selected_contact = st.session_state["selected_message_contact"]
+        if selected_contact:
+            contact = contacts.get(selected_contact, {"name": selected_contact})
+            st.divider()
+            st.subheader(f"Message History with {contact.get('name')}")
+            if st.button("← Back to Recent Messages", type="secondary"):
+                st.session_state["selected_message_contact"] = None
+                st.experimental_rerun()
+
+            contact_messages = [msg for msg in all_messages if "".join(filter(str.isdigit, str(msg.get("contact_info", "")))) == selected_contact]
+            if not contact_messages:
+                st.info("No message history for this contact.")
+            else:
+                for msg in contact_messages:
+                    icon = get_status_icon(msg.get("status") or msg.get("message_status") or "")
+                    message_text = msg.get('message_body', '')
+                    if icon:
+                        message_text = f"{message_text} {icon}"
+                    if msg.get('direction') == "inbound":
+                        st.chat_message("user", avatar="👤").write(message_text)
+                    else:
+                        st.chat_message("assistant", avatar="💼").write(message_text)
+
+            if new_message := st.chat_input("Type your message here..."):
+                try:
+                    url = f"https://api.ultramsg.com/{ULTRAMSG_INSTANCE}/messages/chat"
+                    payload = {
+                        "token": ULTRAMSG_TOKEN,
+                        "to": f"{selected_contact}@c.us",
+                        "body": new_message
+                    }
+                    response = requests.post(url, data=payload)
+                    response.raise_for_status()
+
+                    supabase.table("messages").insert({
+                        "contact_info": selected_contact,
+                        "direction": "outbound",
+                        "message_body": new_message,
+                        "status": "sent"
+                    }).execute()
+
+                    st.rerun()
+
+                except Exception as e:
+                    supabase.table("messages").insert({
+                        "contact_info": selected_contact,
+                        "direction": "outbound",
+                        "message_body": new_message,
+                        "status": "failed"
+                    }).execute()
+                    st.error(f"Failed to send message: {e}")
     else:
         st.info("Please add contacts in the Contact Management tab first.")
