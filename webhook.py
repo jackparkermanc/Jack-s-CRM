@@ -33,7 +33,8 @@ def whatsapp_reply():
             supabase.table("messages").insert({
                 "contact_info": sender_number,
                 "direction": "inbound",
-                "message_body": incoming_msg
+                "message_body": incoming_msg,
+                "message_status": "received"
             }).execute()
         except Exception:
             pass

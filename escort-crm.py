@@ -41,6 +41,29 @@ def get_status_icon(status: str) -> str:
     return status_map.get(str(status).strip().lower(), "")
 
 
+def insert_message_record(contact_info, direction, message_body, status=None):
+    base_payload = {
+        "contact_info": contact_info,
+        "direction": direction,
+        "message_body": message_body,
+    }
+
+    if status is not None:
+        for status_field in ["message_status", "status"]:
+            try:
+                payload = base_payload.copy()
+                payload[status_field] = status
+                supabase.table("messages").insert(payload).execute()
+                return
+            except Exception:
+                pass
+
+    try:
+        supabase.table("messages").insert(base_payload).execute()
+    except Exception as e:
+        st.error(f"Failed to insert message record: {e}")
+
+
 def auto_refresh_messages(interval_seconds: int = 30, key: str = "messages_refresh"):
     refresh_func = getattr(st, "autorefresh", None) or getattr(st, "st_autorefresh", None)
     if callable(refresh_func):
@@ -187,22 +210,12 @@ def message_history_dialog(contact_info, contact_name=None, instance=None, token
             response = requests.post(url, data=payload)
             response.raise_for_status()
 
-            supabase.table("messages").insert({
-                "contact_info": clean_contact,
-                "direction": "outbound",
-                "message_body": new_message,
-                "message_status": "sent"
-            }).execute()
+            insert_message_record(clean_contact, "outbound", new_message, "sent")
 
             st.rerun()
 
         except Exception as e:
-            supabase.table("messages").insert({
-                "contact_info": clean_contact,
-                "direction": "outbound",
-                "message_body": new_message,
-                "message_status": "failed"
-            }).execute()
+            insert_message_record(clean_contact, "outbound", new_message, "failed")
             st.error(f"Failed to send message: {e}")
 
     
