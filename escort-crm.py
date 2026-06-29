@@ -83,22 +83,41 @@ def category_explorer_dialog(main_cat_id):
         st.error("Category not found or deleted.")
         return
 
-    # Setup isolated view state for this specific dialog session
     if st.session_state.get('active_explorer_cat') != main_cat_id:
-            if c3.button("🗑️ Delete", use_container_width=True):
-                sub_cats = [c for c in cat_data if c.get('parent_id') == main_cat['id']]
-                cat_services = [s for s in s_data if s.get('category_id') == main_cat['id']]
-                if sub_cats or cat_services:
-                    st.error("Remove sub-categories and services before deleting.")
-                else:
-                    supabase.table("service_categories").delete().eq("id", main_cat['id']).execute()
-                    st.rerun()
+        st.session_state.active_explorer_cat = main_cat_id
+        st.session_state.explorer_view = 'sub_cats'
+        st.session_state.explorer_sub_cat = None
+        st.session_state.explorer_service = None
+
+    view = st.session_state.explorer_view
+    scat = st.session_state.get('explorer_sub_cat')
+
+    if view == 'sub_cats':
+        st.markdown(f"### 📁 {main_cat['name']}")
+        c1, c2, c3, c4 = st.columns([1.5, 1.5, 1, 1])
+        if c1.button("➕ Add Sub-Category", use_container_width=True):
+            st.session_state.explorer_view = 'add_sub'
+            st.rerun()
+        if c2.button("➕ Add Service", use_container_width=True):
+            st.session_state.explorer_view = 'add_service'
+            st.session_state.explorer_sub_cat = None 
+            st.rerun()
+        if c3.button("✏️ Edit", use_container_width=True):
+            st.session_state.explorer_view = 'edit_main'
+            st.rerun()
+        if c4.button("🗑️ Delete", use_container_width=True):
+            sub_cats = [c for c in cat_data if c.get('parent_id') == main_cat['id']]
+            cat_services = [s for s in s_data if s.get('category_id') == main_cat['id']]
+            if sub_cats or cat_services:
+                st.error("Remove sub-categories and services before deleting.")
+            else:
+                supabase.table("service_categories").delete().eq("id", main_cat['id']).execute()
+                st.rerun()
 
         st.divider()
+        
         sub_cats = [c for c in cat_data if c.get('parent_id') == main_cat['id']]
-        if not sub_cats:
-            st.info("No sub-categories found. Click 'Add Sub-Category' above.")
-        else:
+        if sub_cats:
             st.write("#### Select a Sub-Category:")
             sc_cols = st.columns(2)
             for i, scat_row in enumerate(sub_cats):
@@ -107,18 +126,20 @@ def category_explorer_dialog(main_cat_id):
                         st.session_state.explorer_view = 'services'
                         st.session_state.explorer_sub_cat = scat_row
                         st.rerun()
+            st.divider()
 
         main_cat_services = [s for s in s_data if s.get('category_id') == main_cat['id']]
-        if main_cat_services:
-            st.divider()
-            st.write("#### Services Directly in this Category")
+        st.write("#### Services Directly in this Category")
+        if not main_cat_services:
+            st.info("No standalone services found here.")
+        else:
             for row in main_cat_services:
                 with st.container(border=True):
                     cols = st.columns([4, 1, 1])
                     cols[0].write(f"**{row['title']}**<br>£{row['cost']} | {row['duration']} hrs", unsafe_allow_html=True)
                     if cols[1].button("Edit", key=f"es_main_{row['id']}", use_container_width=True):
                         st.session_state.explorer_service = row
-                        st.session_state.explorer_sub_cat = main_cat 
+                        st.session_state.explorer_sub_cat = None
                         st.session_state.explorer_view = 'edit_service'
                         st.rerun()
                     if cols[2].button("Delete", key=f"ds_main_{row['id']}", use_container_width=True):
@@ -207,7 +228,7 @@ def category_explorer_dialog(main_cat_id):
         st.markdown(f"### {title_prefix} Service")
         
         if st.button("⬅️ Back"):
-            st.session_state.explorer_view = 'services' if scat.get('parent_id') else 'sub_cats'
+            st.session_state.explorer_view = 'services' if st.session_state.explorer_sub_cat else 'sub_cats'
             st.rerun()
             
         cat_options = []
@@ -222,7 +243,13 @@ def category_explorer_dialog(main_cat_id):
         cat_options.sort(key=lambda x: x['label'])
         cat_labels = [opt['label'] for opt in cat_options]
         
-        current_cat_id = srv_data['category_id'] if srv_data else scat['id']
+        if is_edit and srv_data:
+            current_cat_id = srv_data['category_id']
+        elif st.session_state.explorer_sub_cat:
+            current_cat_id = st.session_state.explorer_sub_cat['id']
+        else:
+            current_cat_id = main_cat['id']
+            
         current_idx = 0
         for i, opt in enumerate(cat_options):
             if opt['id'] == current_cat_id:
@@ -249,7 +276,7 @@ def category_explorer_dialog(main_cat_id):
                     supabase.table("services").update(payload).eq("id", srv_data['id']).execute()
                 else:
                     supabase.table("services").insert(payload).execute()
-                st.session_state.explorer_view = 'services' if scat.get('parent_id') else 'sub_cats'
+                st.session_state.explorer_view = 'services' if st.session_state.explorer_sub_cat else 'sub_cats'
                 st.rerun()
 
 @st.dialog("Manage Booking")
@@ -305,6 +332,35 @@ def booking_dialog(action, c_dict, s_dict, data=None):
 
 tab1, tab2, tab3, tab4, tab5 = st.tabs(["📖 Bookings", "👥 Contacts", "✨ Services", "💬 Communication", "📊 System Logs"])
 
+with tab1:
+    st.header("Booking Management")
+    c_data = safe_fetch("contacts")
+    s_data = safe_fetch("services")
+    
+    if c_data and s_data:
+        c_mapping = {c['name']: c['id'] for c in c_data}
+        s_mapping = {f"{s['title']} ({s['duration']} hrs)": s for s in s_data}
+        if st.button("➕ Schedule Booking"): 
+            booking_dialog("Add", c_mapping, s_mapping)
+    elif c_data == [] or s_data == []:
+        st.warning("Please add at least one Contact and one Service before scheduling a booking.")
+    
+    bookings = safe_fetch("bookings", "*, contacts(name), services(title)")
+    if bookings:
+        df = pd.DataFrame(bookings)
+        df['Client'] = df['contacts'].apply(lambda x: x['name'] if x else "Unknown")
+        df['Service'] = df['services'].apply(lambda x: x['title'] if x else "Unknown")
+        df['booking_datetime'] = pd.to_datetime(df['booking_datetime']).dt.strftime('%Y-%m-%d %H:%M')
+        
+        if st.radio("View Mode", ["Table", "Calendar (Grouped)"], horizontal=True) == "Table":
+            st.dataframe(df.drop(columns=['contacts', 'services']), use_container_width=True)
+        else:
+            for d, g in df.groupby(df['booking_datetime'].str[:10]):
+                st.subheader(d)
+                st.dataframe(g.drop(columns=['booking_datetime', 'contacts', 'services']), use_container_width=True)
+    elif bookings == []:
+        st.info("No bookings found.")
+
 with tab2:
     st.header("Contact Management")
     
@@ -313,9 +369,6 @@ with tab2:
         if st.button("➕ Add New Contact", use_container_width=True): 
             contact_dialog("Add")
             
-    c_data = safe_fetch("contacts")
-    s_data = safe_fetch("services")
-    
     if c_data:
         c_dict_display = {f"{c['name']} ({c['contact_info']})": c for c in c_data}
         selected_name = st.selectbox("Select a Contact to view details", options=list(c_dict_display.keys()))
@@ -410,41 +463,11 @@ with tab3:
         st.info("No categories found. Click 'Add Main Category' to get started.")
     else:
         st.write("#### Select a Category:")
-        # Render a clean grid of buttons for the Main Categories
         cols = st.columns(3)
         for i, cat in enumerate(main_cats):
             with cols[i % 3]:
                 if st.button(f"📁 {cat['name']}", key=f"mc_btn_{cat['id']}", use_container_width=True):
                     category_explorer_dialog(cat['id'])
-
-with tab1:
-    st.header("Booking Management")
-    c_data = safe_fetch("contacts")
-    s_data = safe_fetch("services")
-    
-    if c_data and s_data:
-        c_mapping = {c['name']: c['id'] for c in c_data}
-        s_mapping = {f"{s['title']} ({s['duration']} hrs)": s for s in s_data}
-        if st.button("➕ Schedule Booking"): 
-            booking_dialog("Add", c_mapping, s_mapping)
-    elif c_data == [] or s_data == []:
-        st.warning("Please add at least one Contact and one Service before scheduling a booking.")
-    
-    bookings = safe_fetch("bookings", "*, contacts(name), services(title)")
-    if bookings:
-        df = pd.DataFrame(bookings)
-        df['Client'] = df['contacts'].apply(lambda x: x['name'] if x else "Unknown")
-        df['Service'] = df['services'].apply(lambda x: x['title'] if x else "Unknown")
-        df['booking_datetime'] = pd.to_datetime(df['booking_datetime']).dt.strftime('%Y-%m-%d %H:%M')
-        
-        if st.radio("View Mode", ["Table", "Calendar (Grouped)"], horizontal=True) == "Table":
-            st.dataframe(df.drop(columns=['contacts', 'services']), use_container_width=True)
-        else:
-            for d, g in df.groupby(df['booking_datetime'].str[:10]):
-                st.subheader(d)
-                st.dataframe(g.drop(columns=['booking_datetime', 'contacts', 'services']), use_container_width=True)
-    elif bookings == []:
-        st.info("No bookings found.")
 
 with tab4:
     st.header("Direct Messaging & Calls")
@@ -452,7 +475,6 @@ with tab4:
     ULTRAMSG_INSTANCE = st.secrets.get("ULTRAMSG_INSTANCE", "YOUR_INSTANCE")
     ULTRAMSG_TOKEN = st.secrets.get("ULTRAMSG_TOKEN", "YOUR_TOKEN")
     
-    c_data = safe_fetch("contacts")
     if c_data:
         msg_dict = {f"{c['name']} ({c['contact_info']})": c['contact_info'] for c in c_data}
         sel = st.selectbox("Select Contact", options=list(msg_dict.keys()))
