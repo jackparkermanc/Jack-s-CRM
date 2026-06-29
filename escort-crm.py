@@ -139,7 +139,7 @@ def booking_dialog(action, c_dict, s_dict, data=None):
                 st.error(f"Error saving booking: {e}")
             st.rerun()
 
-tab1, tab2, tab3, tab4, tab5 = st.tabs(["📖 Bookings", "👥 Contacts", "✨ Services", "💬 Messaging", "📊 System Logs"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["📖 Bookings", "👥 Contacts", "✨ Services", "💬 Communication", "📊 System Logs"])
 
 with tab2:
     st.header("Contact Management")
@@ -376,6 +376,9 @@ with tab4:
                 st.rerun() 
                 
             except Exception as e:
+                log_to_db("ERROR", f"Failed to send message: {e}")
+                st.error(f"Failed to send message: {e}")
+
 # --- TAB 5: SYSTEM LOGS ---
 with tab5:
     st.header("System Logs")
