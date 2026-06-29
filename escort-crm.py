@@ -185,7 +185,11 @@ def message_history_dialog(contact_info, contact_name=None, instance=None, token
                 st.success("Number saved to CRM.")
                 st.rerun()
 
-    history = supabase.table("messages").select("*").eq("contact_info", clean_contact).order("timestamp", desc=False).execute().data or []
+    history_raw = supabase.table("messages").select("*").order("timestamp", desc=False).execute().data or []
+    history = [
+        msg for msg in history_raw
+        if "".join(filter(str.isdigit, str(msg.get("contact_info", "")))) == clean_contact
+    ]
     if not history:
         st.info("No message history for this contact.")
     else:
