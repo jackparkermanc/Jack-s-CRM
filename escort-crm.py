@@ -6,7 +6,6 @@ import requests
 from supabase import create_client, Client
 import streamlit.components.v1 as components
 
-# --- Setup ---
 @st.cache_resource
 def init_connection() -> Client:
     url = st.secrets["SUPABASE_URL"]
@@ -15,16 +14,13 @@ def init_connection() -> Client:
 
 supabase = init_connection()
 
-# --- Utility Functions ---
 def log_to_db(level, message):
-    """Safely logs system events to the app_logs table."""
     try:
         supabase.table("app_logs").insert({"source": "Streamlit_App", "level": level, "message": message}).execute()
     except Exception:
-        pass # Fail silently if logging fails to prevent app crashes
+        pass
 
 def safe_fetch(table, select_query="*", order_col=None, order_desc=False):
-    """Fetches data with a 3-try retry mechanism to handle network blips."""
     for i in range(3):
         try:
             query = supabase.table(table).select(select_query)
@@ -42,7 +38,6 @@ def safe_fetch(table, select_query="*", order_col=None, order_desc=False):
 st.set_page_config(page_title="Business CRM", layout="wide")
 st.title("Business CRM")
 
-# --- Dialogs (Popups) ---
 @st.dialog("Manage Contact")
 def contact_dialog(action, data=None):
     with st.form("c_form"):
@@ -65,16 +60,37 @@ def contact_dialog(action, data=None):
             st.rerun()
 
 @st.dialog("Manage Category")
-def category_dialog(action, data=None):
+def category_dialog(action, data=None, main_cats=None, default_parent_id=None):
+    if main_cats is None: main_cats = []
     with st.form("cat_form"):
         name = st.text_input("Category Name", value=data['name'] if data else "")
+        
+        parent_opts = ["None (Main Category)"] + [c['name'] for c in main_cats if (not data or c['id'] != data.get('id'))]
+        
+        default_idx = 0
+        if data and data.get('parent_id'):
+            for i, c in enumerate(main_cats):
+                if c['id'] == data['parent_id']:
+                    default_idx = i + 1
+        elif default_parent_id:
+            for i, c in enumerate(main_cats):
+                if c['id'] == default_parent_id:
+                    default_idx = i + 1
+                    
+        parent_sel = st.selectbox("Parent Category", parent_opts, index=default_idx)
+        
         if st.form_submit_button("Submit"):
+            parent_id = None
+            if parent_sel != "None (Main Category)":
+                parent_id = next(c['id'] for c in main_cats if c['name'] == parent_sel)
+                
+            payload = {"name": name, "parent_id": parent_id}
             try:
                 if action == "Add":
-                    supabase.table("service_categories").insert({"name": name}).execute()
+                    supabase.table("service_categories").insert(payload).execute()
                     log_to_db("INFO", f"Added category: {name}")
                 else:
-                    supabase.table("service_categories").update({"name": name}).eq("id", data['id']).execute()
+                    supabase.table("service_categories").update(payload).eq("id", data['id']).execute()
                     log_to_db("INFO", f"Updated category: {name}")
             except Exception as e:
                 log_to_db("ERROR", f"Category {action} failed: {e}")
@@ -82,7 +98,7 @@ def category_dialog(action, data=None):
             st.rerun()
 
 @st.dialog("Manage Service")
-def service_dialog(action, cat_dict, data=None):
+def service_dialog(action, cat_dict, data=None, default_cat_id=None):
     if not cat_dict:
         st.warning("Please add a category first.")
         if st.button("Close"): st.rerun()
@@ -91,9 +107,13 @@ def service_dialog(action, cat_dict, data=None):
     with st.form("s_form"):
         cat_names = list(cat_dict.keys())
         cat_idx = 0
+        
         if data and data.get('category_id'):
             for i, name in enumerate(cat_names):
                 if cat_dict[name] == data['category_id']: cat_idx = i
+        elif default_cat_id:
+            for i, name in enumerate(cat_names):
+                if cat_dict[name] == default_cat_id: cat_idx = i
                 
         cat_sel = st.selectbox("Category", cat_names, index=cat_idx if cat_names else 0)
         t = st.text_input("Title", value=data['title'] if data else "")
@@ -125,20 +145,94 @@ def service_dialog(action, cat_dict, data=None):
                 st.error(f"Error saving service: {e}")
             st.rerun()
 
+@st.dialog("Sub-Categories")
+def view_main_category_dialog(cat, main_cats, all_cats, all_services):
+    st.markdown(f"### 📁 {cat['name']}")
+    
+    # Action buttons for the main category
+    c1, c2, c3 = st.columns(3)
+    if c1.button("➕ Add Sub-Category", use_container_width=True):
+        category_dialog("Add", main_cats=main_cats, default_parent_id=cat['id'])
+    if c2.button("✏️ Edit Category", use_container_width=True):
+        category_dialog("Edit", data=cat, main_cats=main_cats)
+    if c3.button("🗑️ Delete", use_container_width=True):
+        sub_cats = [c for c in all_cats if c.get('parent_id') == cat['id']]
+        cat_services = [s for s in all_services if s.get('category_id') == cat['id']]
+        if sub_cats or cat_services:
+            st.error("Remove sub-categories and services before deleting.")
+        else:
+            supabase.table("service_categories").delete().eq("id", cat['id']).execute()
+            st.rerun()
+
+    st.divider()
+    
+    # Sub-Categories buttons
+    sub_cats = [c for c in all_cats if c.get('parent_id') == cat['id']]
+    if not sub_cats:
+        st.info("No sub-categories found. Click 'Add Sub-Category' above.")
+    else:
+        st.write("#### Select a Sub-Category:")
+        sc_cols = st.columns(2)
+        for i, scat in enumerate(sub_cats):
+            with sc_cols[i % 2]:
+                # Streamlit magically replaces the dialog if we call another dialog function here!
+                if st.button(f"📂 {scat['name']}", use_container_width=True, key=f"sc_btn_{scat['id']}"):
+                    view_sub_category_dialog(scat, cat, all_cats, all_services, main_cats)
+
+@st.dialog("Services")
+def view_sub_category_dialog(scat, main_cat, all_cats, all_services, main_cats):
+    st.markdown(f"### 📂 {main_cat['name']} > {scat['name']}")
+
+    cat_dict_for_services = {}
+    for c in main_cats: cat_dict_for_services[c['name']] = c['id']
+    for c in all_cats:
+        if c.get('parent_id'):
+            p_name = next((p['name'] for p in main_cats if p['id'] == c['parent_id']), "Unknown")
+            cat_dict_for_services[f"{p_name} -> {c['name']}"] = c['id']
+
+    c1, c2, c3, c4 = st.columns([1, 1.5, 1, 1])
+    if c1.button("⬅️ Back"):
+        view_main_category_dialog(main_cat, main_cats, all_cats, all_services)
+    if c2.button("➕ Add Service"):
+        service_dialog("Add", cat_dict_for_services, default_cat_id=scat['id'])
+    if c3.button("✏️ Edit"):
+        category_dialog("Edit", data=scat, main_cats=main_cats)
+    if c4.button("🗑️ Delete"):
+        scat_services_check = [s for s in all_services if s.get('category_id') == scat['id']]
+        if scat_services_check:
+            st.error("Remove services before deleting.")
+        else:
+            supabase.table("service_categories").delete().eq("id", scat['id']).execute()
+            st.rerun()
+
+    st.divider()
+
+    scat_services = [s for s in all_services if s.get('category_id') == scat['id']]
+    if not scat_services:
+        st.info("No services found in this sub-category.")
+    else:
+        for row in scat_services:
+            with st.container(border=True):
+                cols = st.columns([4, 1, 1])
+                cols[0].write(f"**{row['title']}**<br>£{row['cost']} | {row['duration']} hrs", unsafe_allow_html=True)
+                if cols[1].button("Edit", key=f"es_sub_{row['id']}", use_container_width=True):
+                    service_dialog("Edit", cat_dict_for_services, row)
+                if cols[2].button("Delete", key=f"ds_sub_{row['id']}", use_container_width=True):
+                    supabase.table("services").delete().eq("id", row['id']).execute()
+                    st.rerun()
+
 @st.dialog("Manage Booking")
 def booking_dialog(action, c_dict, s_dict, data=None):
     with st.form("b_form"):
         c_names = list(c_dict.keys())
         s_names = list(s_dict.keys())
         
-        # Pre-fill dropdowns if editing an existing booking
         c_idx = 0
         s_idx = 0
         if data:
             for i, name in enumerate(c_names):
                 if c_dict[name] == data['contact_id']: c_idx = i
             for i, name in enumerate(s_names):
-                # We now look inside the service dictionary to match the ID
                 if s_dict[name]['id'] == data['service_id']: s_idx = i
                 
         c_sel = st.selectbox("Contact", c_names, index=c_idx if c_names else 0)
@@ -147,7 +241,6 @@ def booking_dialog(action, c_dict, s_dict, data=None):
         default_date = date.today()
         default_time = time(12, 0)
         
-        # Handle Supabase ISO datetime parsing
         if data and 'booking_datetime' in data:
             dt_str = data['booking_datetime'].replace("Z", "+00:00")
             parsed_dt = datetime.fromisoformat(dt_str)
@@ -165,7 +258,7 @@ def booking_dialog(action, c_dict, s_dict, data=None):
                 "contact_id": c_dict[c_sel], 
                 "service_id": s_dict[s_sel]['id'], 
                 "booking_datetime": dt, 
-                "hours": s_dict[s_sel]['duration'] # Automatically pull the exact duration from the selected service
+                "hours": s_dict[s_sel]['duration'] 
             }
             try:
                 if action == "Add":
@@ -179,16 +272,14 @@ def booking_dialog(action, c_dict, s_dict, data=None):
                 st.error(f"Error saving booking: {e}")
             st.rerun()
 
-# --- Main Tabs ---
 tab1, tab2, tab3, tab4, tab5 = st.tabs(["📖 Bookings", "👥 Contacts", "✨ Services", "💬 Communication", "📊 System Logs"])
 
-# --- TAB 2: CONTACTS ---
 with tab2:
     st.header("Contact Management")
     
     col1, col2 = st.columns([1, 4])
     with col1:
-        if st.button("➕ Add New Contact"): 
+        if st.button("➕ Add New Contact", use_container_width=True): 
             contact_dialog("Add")
             
     c_data = safe_fetch("contacts")
@@ -217,7 +308,6 @@ with tab2:
         st.divider()
         st.subheader("Client Bookings")
         
-        # Filter bookings specifically for the selected contact
         bookings_data = safe_fetch("bookings", "*, services(title, cost)")
         contact_bookings = [b for b in bookings_data if b['contact_id'] == selected_contact['id']] if bookings_data else []
         
@@ -238,7 +328,6 @@ with tab2:
         future_bookings.sort(key=lambda x: x['dt_obj'])
 
         c_mapping = {cd['name']: cd['id'] for cd in c_data}
-        # Pass the full service dictionary to the mapping so we can pull duration later
         s_mapping = {f"{sd['title']} ({sd['duration']} hrs)": sd for sd in s_data} if s_data else {}
         
         st.write("### Upcoming Bookings")
@@ -246,88 +335,59 @@ with tab2:
             st.info("No upcoming bookings.")
         else:
             for b in future_bookings:
-                bc1, bc2, bc3 = st.columns([4, 1, 1])
-                svc_title = b['services']['title'] if b.get('services') else "Unknown Service"
-                bc1.write(f"📅 **{b['dt_obj'].strftime('%Y-%m-%d %H:%M')}** | {svc_title} ({b['hours']} hrs)")
-                if bc2.button("Edit", key=f"eb_f_{b['id']}"):
-                    booking_dialog("Edit", c_mapping, s_mapping, b)
-                if bc3.button("Delete", key=f"db_f_{b['id']}"):
-                    supabase.table("bookings").delete().eq("id", b['id']).execute()
-                    log_to_db("INFO", f"Deleted future booking ID {b['id']}")
-                    st.rerun()
+                with st.container(border=True):
+                    bc1, bc2, bc3 = st.columns([4, 1, 1])
+                    svc_title = b['services']['title'] if b.get('services') else "Unknown Service"
+                    bc1.write(f"📅 **{b['dt_obj'].strftime('%Y-%m-%d %H:%M')}** | {svc_title} ({b['hours']} hrs)")
+                    if bc2.button("Edit", key=f"eb_f_{b['id']}", use_container_width=True):
+                        booking_dialog("Edit", c_mapping, s_mapping, b)
+                    if bc3.button("Delete", key=f"db_f_{b['id']}", use_container_width=True):
+                        supabase.table("bookings").delete().eq("id", b['id']).execute()
+                        log_to_db("INFO", f"Deleted future booking ID {b['id']}")
+                        st.rerun()
 
         st.write("### Past Bookings")
         if not past_bookings:
             st.info("No past bookings.")
         else:
             for b in past_bookings:
-                bc1, bc2, bc3 = st.columns([4, 1, 1])
-                svc_title = b['services']['title'] if b.get('services') else "Unknown Service"
-                bc1.write(f"📅 **{b['dt_obj'].strftime('%Y-%m-%d %H:%M')}** | {svc_title} ({b['hours']} hrs)")
-                if bc2.button("Edit", key=f"eb_p_{b['id']}"):
-                    booking_dialog("Edit", c_mapping, s_mapping, b)
-                if bc3.button("Delete", key=f"db_p_{b['id']}"):
-                    supabase.table("bookings").delete().eq("id", b['id']).execute()
-                    log_to_db("INFO", f"Deleted past booking ID {b['id']}")
-                    st.rerun()
+                with st.container(border=True):
+                    bc1, bc2, bc3 = st.columns([4, 1, 1])
+                    svc_title = b['services']['title'] if b.get('services') else "Unknown Service"
+                    bc1.write(f"📅 **{b['dt_obj'].strftime('%Y-%m-%d %H:%M')}** | {svc_title} ({b['hours']} hrs)")
+                    if bc2.button("Edit", key=f"eb_p_{b['id']}", use_container_width=True):
+                        booking_dialog("Edit", c_mapping, s_mapping, b)
+                    if bc3.button("Delete", key=f"db_p_{b['id']}", use_container_width=True):
+                        supabase.table("bookings").delete().eq("id", b['id']).execute()
+                        log_to_db("INFO", f"Deleted past booking ID {b['id']}")
+                        st.rerun()
     else:
         st.info("No contacts found. Add one above.")
 
-# --- TAB 3: SERVICES ---
 with tab3:
     st.header("Service Management")
     
     cat_data = safe_fetch("service_categories")
-    cat_dict = {c['name']: c['id'] for c in cat_data} if cat_data else {}
+    s_data = safe_fetch("services")
     
-    col1, col2 = st.columns([1, 4])
-    with col1:
-        if st.button("➕ Add Category"): 
-            category_dialog("Add")
-    with col2:
-        if st.button("➕ Add New Service"): 
-            service_dialog("Add", cat_dict)
+    main_cats = [c for c in cat_data if not c.get('parent_id')] if cat_data else []
+    
+    if st.button("➕ Add Main Category", use_container_width=True): 
+        category_dialog("Add", main_cats=main_cats)
             
     st.divider()
     
-    s_data = safe_fetch("services")
-    
-    if not cat_data:
-        st.info("No categories found. Add one above to get started.")
+    if not main_cats:
+        st.info("No categories found. Click 'Add Main Category' to get started.")
     else:
-        for cat in cat_data:
-            with st.expander(f"📁 {cat['name']}", expanded=True):
-                cat_services = [s for s in s_data if s.get('category_id') == cat['id']] if s_data else []
-                
-                # Category management buttons
-                cat_btn_c1, cat_btn_c2, _ = st.columns([2, 2, 6])
-                if cat_btn_c1.button("✏️ Edit Category", key=f"ecat_{cat['id']}", use_container_width=True):
-                    category_dialog("Edit", cat)
-                if cat_btn_c2.button("🗑️ Delete Category", key=f"dcat_{cat['id']}", use_container_width=True):
-                    # Ensure no services exist before deleting to prevent database errors
-                    if cat_services:
-                        st.error("Cannot delete a category that still contains services. Delete or move the services first.")
-                    else:
-                        supabase.table("service_categories").delete().eq("id", cat['id']).execute()
-                        log_to_db("INFO", f"Deleted category: {cat['name']}")
-                        st.rerun()
-                        
-                st.write("---")
-                
-                if not cat_services:
-                    st.write("*No services in this category.*")
-                else:
-                    for row in cat_services:
-                        cols = st.columns([3, 1, 1])
-                        cols[0].write(f"**{row['title']}** (£{row['cost']} | {row['duration']} hrs)")
-                        if cols[1].button("Edit", key=f"es{row['id']}"): 
-                            service_dialog("Edit", cat_dict, row)
-                        if cols[2].button("Delete", key=f"ds{row['id']}"):
-                            supabase.table("services").delete().eq("id", row['id']).execute()
-                            log_to_db("INFO", f"Deleted service: {row['title']}")
-                            st.rerun()
+        st.write("#### Select a Category:")
+        # Render a clean grid of buttons for the Main Categories
+        cols = st.columns(3)
+        for i, cat in enumerate(main_cats):
+            with cols[i % 3]:
+                if st.button(f"📁 {cat['name']}", key=f"mc_btn_{cat['id']}", use_container_width=True):
+                    view_main_category_dialog(cat, main_cats, cat_data, s_data)
 
-# --- TAB 1: BOOKINGS ---
 with tab1:
     st.header("Booking Management")
     c_data = safe_fetch("contacts")
@@ -335,7 +395,6 @@ with tab1:
     
     if c_data and s_data:
         c_mapping = {c['name']: c['id'] for c in c_data}
-        # Pass the full service dictionary to the mapping so we can pull duration later
         s_mapping = {f"{s['title']} ({s['duration']} hrs)": s for s in s_data}
         if st.button("➕ Schedule Booking"): 
             booking_dialog("Add", c_mapping, s_mapping)
@@ -358,7 +417,6 @@ with tab1:
     elif bookings == []:
         st.info("No bookings found.")
 
-# --- TAB 4: COMMUNICATION ---
 with tab4:
     st.header("Direct Messaging & Calls")
     
@@ -373,7 +431,6 @@ with tab4:
         
         clean_target = "".join(filter(str.isdigit, str(target_number)))
         
-        # Jitsi Video Integration
         with st.expander("📹 Video / Voice Call (Jitsi Meet)"):
             room_url = f"https://meet.jit.si/CRM_Meeting_{clean_target}"
             
@@ -413,12 +470,9 @@ with tab4:
                 height=600,
             )
 
-        # Chat History Integration
-        try:
-            chat_history = supabase.table("messages").select("*").eq("contact_info", clean_target).order("timestamp", desc=False).execute().data
-        except Exception as e:
-            chat_history = []
-            log_to_db("ERROR", f"Failed to load chat history: {e}")
+        chat_history = safe_fetch("messages", "*")
+        chat_history = [msg for msg in chat_history if msg['contact_info'] == clean_target]
+        chat_history.sort(key=lambda x: x['timestamp'])
         
         st.divider()
         st.subheader(f"Chat History with {sel.split(' (')[0]}")
@@ -438,7 +492,6 @@ with tab4:
         
         if new_message := st.chat_input("Type your message here..."):
             try:
-                # Send via Ultramsg
                 url = f"https://api.ultramsg.com/{ULTRAMSG_INSTANCE}/messages/chat"
                 payload = {
                     "token": ULTRAMSG_TOKEN,
@@ -448,7 +501,6 @@ with tab4:
                 response = requests.post(url, data=payload)
                 response.raise_for_status()
                 
-                # Save outgoing message to DB
                 supabase.table("messages").insert({
                     "contact_info": clean_target,
                     "direction": "outbound",
@@ -461,10 +513,10 @@ with tab4:
             except Exception as e:
                 log_to_db("ERROR", f"Failed to send message: {e}")
                 st.error(f"Failed to send message: {e}")
+                
     else:
         st.info("Please add contacts in the Contact Management tab first.")
 
-# --- TAB 5: SYSTEM LOGS ---
 with tab5:
     st.header("System Logs")
     
@@ -475,11 +527,9 @@ with tab5:
     with col2:
         if st.button("🗑️ Clear Logs"):
             try:
-                # Safely delete logs by targeting an impossible condition
-                supabase.table("app_logs").delete().neq("id", -1).execute()
-            except Exception as e:
-                st.error("⚠️ Failed to clear logs. Please disable RLS on the `app_logs` table in Supabase.")
-                time_module.sleep(3)
+                supabase.table("app_logs").delete().neq("id", 0).execute()
+            except Exception:
+                pass
             st.rerun()
 
     logs_data = safe_fetch("app_logs", "*", order_col="created_at", order_desc=True)
