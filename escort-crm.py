@@ -51,7 +51,7 @@ def auto_refresh_messages(interval_seconds: int = 30, key: str = "messages_refre
         now = time_module.time()
         if now - st.session_state[key] >= interval_seconds:
             st.session_state[key] = now
-            st.experimental_rerun()
+            st.rerun()
 
 
 st.set_page_config(page_title="Jack's CRM", layout="wide")
@@ -282,6 +282,12 @@ with tab4:
             st.session_state["selected_message_contact"] = None
         if "last_seen_messages" not in st.session_state:
             st.session_state["last_seen_messages"] = {}
+        if "message_feedback" not in st.session_state:
+            st.session_state["message_feedback"] = ""
+
+        if st.session_state["message_feedback"]:
+            st.info(st.session_state["message_feedback"])
+            st.session_state["message_feedback"] = ""
 
         def parse_timestamp(ts):
             if not ts:
@@ -332,7 +338,8 @@ with tab4:
                 row[2].markdown(f"{status_icon}")
                 if row[3].button("Open", key=f"recent_{contact_info}"):
                     st.session_state["selected_message_contact"] = contact_info
-                    st.experimental_rerun()
+                    st.session_state["message_feedback"] = f"Opened history for {contact.get('name', contact_info)}."
+                    st.rerun()
 
         selected_contact = st.session_state["selected_message_contact"]
         if selected_contact:
@@ -341,7 +348,8 @@ with tab4:
             st.subheader(f"Message History with {contact.get('name')}")
             if st.button("← Back to Recent Messages", type="secondary"):
                 st.session_state["selected_message_contact"] = None
-                st.experimental_rerun()
+                st.session_state["message_feedback"] = "Returned to recent messages."
+                st.rerun()
 
             contact_messages = [msg for msg in all_messages if "".join(filter(str.isdigit, str(msg.get("contact_info", "")))) == selected_contact]
             if not contact_messages:
