@@ -223,6 +223,10 @@ def message_history_dialog(contact_info, contact_name=None, instance=None, token
             st.error(f"Failed to send message: {e}")
 
     
+with tab2:
+    st.header("Contact Management")
+    c_data = safe_fetch("contacts")
+
     if c_data:
         c_dict_display = {f"{c['name']} ({c['contact_info']})": c for c in c_data}
         selected_name = st.selectbox("Select a Contact to view details", options=list(c_dict_display.keys()))
