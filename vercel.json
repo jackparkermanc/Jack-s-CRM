@@ -3,17 +3,9 @@
   "devCommand": "npm run dev",
   "outputDirectory": "./dist",
   "env": {
-    "VITE_SUPABASE_URL": {
-      "description": "Your Supabase project URL"
-    },
-    "VITE_SUPABASE_ANON_KEY": {
-      "description": "Your Supabase anonymous key"
-    },
-    "VITE_ULTRAMSG_INSTANCE": {
-      "description": "UltraMsg instance ID for WhatsApp"
-    },
-    "VITE_ULTRAMSG_TOKEN": {
-      "description": "UltraMsg API token"
-    }
+    "VITE_SUPABASE_URL": "@vite_supabase_url",
+    "VITE_SUPABASE_ANON_KEY": "@vite_supabase_anon_key",
+    "VITE_ULTRAMSG_INSTANCE": "@vite_ultramsg_instance",
+    "VITE_ULTRAMSG_TOKEN": "@vite_ultramsg_token"
   }
 }
