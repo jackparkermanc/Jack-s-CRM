@@ -47,35 +47,24 @@ function Communication() {
 
   const handleSendMessage = async (e) => {
     e.preventDefault()
-    if (!messageInput.trim() || !selectedContact) return
-
-    try {
-      await callsAPI.sendLink({
-        contact_number: selectedContact.contact_info,
-        room_url: `https://meet.jit.si/CRM_Message_${selectedContact.contact_info.replace(/\D/g, '')}`
-      }).catch(() => null)  // Don't fail if UltraMsg not configured
-
-      setMessageInput('')
-      fetchMessages()
-    } catch (error) {
-      alert('Failed to send message: ' + error.message)
-    }
-  }
-
-  const handleSendCallLink = async () => {
     if (!selectedContact) return
+
     const cleanNumber = selectedContact.contact_info.replace(/\D/g, '')
     const roomUrl = `https://meet.jit.si/CRM_Meeting_${cleanNumber}`
 
     try {
+      // Send video call link via WhatsApp
       await callsAPI.sendLink({
         contact_number: selectedContact.contact_info,
         room_url: roomUrl
       })
-      alert('Call link sent via WhatsApp!')
+      
+      alert('✅ Video meeting link sent via WhatsApp!')
+      setMessageInput('')
+      await new Promise(resolve => setTimeout(resolve, 500)) // Brief pause for message to be saved
       fetchMessages()
     } catch (error) {
-      alert('Failed to send call link: ' + error.message)
+      alert('Failed to send meeting link: ' + error.message)
     }
   }
 
@@ -115,12 +104,12 @@ function Communication() {
               </div>
 
               <div className="flex space-x-2 mb-4">
-                <button
-                  onClick={handleSendCallLink}
-                  className="btn-primary flex items-center space-x-2"
-                >
-                  <FaVideo /> <span>Send Video Call</span>
-                </button>
+                <div className="bg-blue-50 p-3 rounded-lg flex-1">
+                  <p className="text-sm text-gray-700">
+                    💬 <strong>Messages from WhatsApp appear here automatically</strong>
+                  </p>
+                  <p className="text-xs text-gray-600 mt-1">Messages sent from any device will sync with your CRM</p>
+                </div>
               </div>
 
               {/* Messages Container */}
