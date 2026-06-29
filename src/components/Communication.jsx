@@ -16,7 +16,8 @@ function Communication() {
   useEffect(() => {
     if (selectedContact) {
       fetchMessages()
-      const interval = setInterval(fetchMessages, 5000)
+      // Set to 30000 milliseconds (30 seconds)
+      const interval = setInterval(fetchMessages, 30000)
       return () => clearInterval(interval)
     }
   }, [selectedContact])
@@ -30,7 +31,8 @@ function Communication() {
         setSelectedContact(res.data[0])
       }
     } catch (error) {
-      alert('Failed to fetch contacts: ' + error.message)
+      // Replaced alert with console.error for better UX
+      console.error('Failed to fetch contacts: ', error.message)
     }
     setLoading(false)
   }
@@ -47,26 +49,26 @@ function Communication() {
 
   const handleSendMessage = async (e) => {
     e.preventDefault()
-    if (!selectedContact) return
-
-    const cleanNumber = selectedContact.contact_info.replace(/\D/g, '')
-    const roomUrl = `https://meet.jit.si/CRM_Meeting_${cleanNumber}`
+    
+    // Check if there is a contact selected AND if the message is not empty
+    if (!selectedContact || !messageInput.trim()) return
 
     try {
-      // Send video call link via WhatsApp
-      await callsAPI.sendLink({
+      // Send the standard text message using messagesAPI
+      await messagesAPI.sendMessage({
         contact_number: selectedContact.contact_info,
-        room_url: roomUrl
+        message_body: messageInput
       })
+            
+      setMessageInput('') // Clear the input field
+      await new Promise(resolve => setTimeout(resolve, 500)) // Brief pause 
+      fetchMessages() // Refresh the chat
       
-      alert('✅ Video meeting link sent via WhatsApp!')
-      setMessageInput('')
-      await new Promise(resolve => setTimeout(resolve, 500)) // Brief pause for message to be saved
-      fetchMessages()
     } catch (error) {
-      alert('Failed to send meeting link: ' + error.message)
+      // Replaced alert with console.error for better UX
+      console.error('Failed to send message: ', error.message)
     }
-  }
+  } // Added the missing closing bracket here!
 
   if (loading) return <div className="p-6 text-center">Loading...</div>
 
@@ -152,14 +154,14 @@ function Communication() {
                 />
                 <button
                   type="submit"
-                  className="btn-primary px-4 py-2 flex items-center space-x-2"
+                  className="btn-primary bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors flex items-center space-x-2"
                 >
                   <FaPaperPlane /> <span>Send</span>
                 </button>
               </form>
             </>
           ) : (
-            <div className="card text-center text-gray-500">
+            <div className="card bg-white rounded-lg shadow p-8 text-center text-gray-500">
               <p>Select a contact to start messaging</p>
             </div>
           )}
